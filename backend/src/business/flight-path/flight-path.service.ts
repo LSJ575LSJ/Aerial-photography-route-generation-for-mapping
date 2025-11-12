@@ -163,12 +163,79 @@ export class FlightPathService {
   }
 
   /**
-   * 生成无人机航线路径
+   * 标准化多边形顶点数组：
+   * - GeoJSON 多边形通常会在结尾重复首个点以闭合路径，这里去掉末尾重复点，方便旋转和扫描计算。
+   * - 如果为空则直接返回。
+   */
+  private normalizePolygon(polygon: Polygon): Polygon {
+    if (polygon.length === 0) {
+      return polygon;
+    }
+    const first = polygon[0];
+    const last = polygon[polygon.length - 1];
+    if (first[0] === last[0] && first[1] === last[1]) {
+      return polygon.slice(0, -1);
+    }
+    return polygon;
+  }
+
+  /**
+   * 计算多边形的几何中心（质心）
+   * 这里使用简单的顶点平均值，作为旋转中心，使得整体旋转不会产生平移偏差。
+   */
+  private getPolygonCentroid(polygon: Polygon): Point {
+    if (polygon.length === 0) {
+      return [0, 0];
+    }
+    const { sumLng, sumLat } = polygon.reduce(
+      (acc, point) => ({
+        sumLng: acc.sumLng + point[0],
+        sumLat: acc.sumLat + point[1],
+      }),
+      { sumLng: 0, sumLat: 0 },
+    );
+    return [sumLng / polygon.length, sumLat / polygon.length];
+  }
+
+  /**
+   * 将指定点围绕给定中心按角度旋转
+   * @param point 原始点坐标
+   * @param center 旋转中心
+   * @param angleDeg 旋转角度（度），正数为顺时针
+   * @returns 旋转后的点坐标
+   */
+  private rotatePoint(point: Point, center: Point, angleDeg: number): Point {
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    const translatedX = point[0] - center[0];
+    const translatedY = point[1] - center[1];
+
+    const rotatedX = translatedX * cos - translatedY * sin;
+    const rotatedY = translatedX * sin + translatedY * cos;
+
+    return [rotatedX + center[0], rotatedY + center[1]];
+  }
+
+  /**
+   * 批量旋转多边形的所有顶点
+   * @param polygon 多边形顶点集合
+   * @param center 旋转中心
+  * @param angleDeg 旋转角度（度），正数为顺时针
+   */
+  private rotatePolygon(polygon: Polygon, center: Point, angleDeg: number): Polygon {
+    return polygon.map((point) => this.rotatePoint(point, center, angleDeg));
+  }
+
+  /**
+   * 生成无人机航线路径，支持自定义扫描角度
    * @param polygon - 多边形区域的顶点坐标数组，每个顶点为[经度, 纬度]
    * @param spacing - 航线间距，单位：米
    * @param startPoint - 起飞点坐标 [经度, 纬度]
    * @param direction - 扫描方向，可选值：'horizontal'（水平）或'vertical'（垂直），默认为 'horizontal'
    * @param endPoint - 终点坐标 [经度, 纬度]，如果不设置则使用起飞点作为终点
+   * @param angle - 航线相对于水平轴的旋转角度（度），正数为顺时针
    * @returns 返回航线信息对象
    */
   generateFlightPath(
@@ -177,15 +244,89 @@ export class FlightPathService {
     startPoint: Point,
     direction: 'horizontal' | 'vertical' = 'horizontal',
     endPoint: Point | null = null,
+    angle = 0,
+    margin = 0,
   ): FlightPathResult {
+    const normalizedPolygon = this.normalizePolygon(polygon);
+    const hasPolygon = normalizedPolygon.length > 0;
+    const rotationCenter = hasPolygon
+      ? this.getPolygonCentroid(normalizedPolygon)
+      : startPoint;
+
+    const rotatedPolygon = hasPolygon
+      ? this.rotatePolygon(normalizedPolygon, rotationCenter, -angle)
+      : normalizedPolygon;
+
+    const rotatedStart = this.rotatePoint(startPoint, rotationCenter, -angle);
+    const rotatedEnd = endPoint
+      ? this.rotatePoint(endPoint, rotationCenter, -angle)
+      : null;
+
+    const alignedResult = this.generateAlignedFlightPath(
+      rotatedPolygon,
+      spacing,
+      rotatedStart,
+      direction,
+      rotatedEnd,
+      margin,
+    );
+
+    const path = alignedResult.path.map((point) =>
+      this.rotatePoint(point, rotationCenter, angle),
+    );
+    const waypoints = alignedResult.waypoints.map((point) =>
+      this.rotatePoint(point, rotationCenter, angle),
+    );
+
+    return {
+      path,
+      waypoints,
+    };
+  }
+
+  /**
+   * 在水平/垂直对齐的坐标系中生成航线
+   * @param polygon - 已对齐的多边形顶点
+   * @param spacing - 航线间距
+   * @param startPoint - 已对齐的起飞点
+   * @param direction - 扫描方向
+   * @param endPoint - 已对齐的降落点
+   * @returns 航线结果
+   */
+  private generateAlignedFlightPath(
+    polygon: Polygon,
+    spacing: number,
+    startPoint: Point,
+    direction: 'horizontal' | 'vertical',
+    endPoint: Point | null,
+    margin = 0,
+  ): FlightPathResult {
+    if (polygon.length === 0) {
+      const finalPoint = endPoint || startPoint;
+      const path: Point[] =
+        finalPoint[0] === startPoint[0] && finalPoint[1] === startPoint[1]
+          ? [startPoint]
+          : [startPoint, finalPoint];
+      const waypoints: Point[] =
+        endPoint && (endPoint[0] !== startPoint[0] || endPoint[1] !== startPoint[1])
+          ? [endPoint]
+          : [];
+      return {
+        path,
+        waypoints,
+      };
+    }
+
     const bbox = this.calculateBoundingBox(polygon);
     const lines: ScanLine[] = [];
     const spacingDegrees = spacing / 111000; // 转换米到度数（粗略）
+    const clampedMargin = Math.min(Math.max(margin, 0), 5000);
 
     if (direction === 'horizontal') {
       // 水平方向扫描
       let currentLat = bbox.min[1];
       while (currentLat <= bbox.max[1]) {
+        // 与多边形求交点的平行线
         const line: [Point, Point] = [
           [bbox.min[0] - 0.01, currentLat],
           [bbox.max[0] + 0.01, currentLat],
@@ -197,6 +338,17 @@ export class FlightPathService {
           const sortedIntersections = intersections.sort(
             (a, b) => a.point[0] - b.point[0],
           );
+          if (clampedMargin > 0) {
+            const latRad = (currentLat * Math.PI) / 180;
+            const cosLat = Math.cos(latRad);
+            const metersPerDegLng =
+              Math.max(Math.abs(cosLat), 1e-6) * 111320; // 避免除以0
+            const marginLonDeg = clampedMargin / metersPerDegLng;
+            const first = sortedIntersections[0];
+            const last = sortedIntersections[sortedIntersections.length - 1];
+            first.point = [first.point[0] - marginLonDeg, first.point[1]];
+            last.point = [last.point[0] + marginLonDeg, last.point[1]];
+          }
           lines.push({
             points: sortedIntersections,
             coordinate: currentLat,
@@ -220,6 +372,14 @@ export class FlightPathService {
           const sortedIntersections = intersections.sort(
             (a, b) => a.point[1] - b.point[1],
           );
+          if (clampedMargin > 0) {
+            const metersPerDegLat = 111000;
+            const marginLatDeg = clampedMargin / metersPerDegLat;
+            const first = sortedIntersections[0];
+            const last = sortedIntersections[sortedIntersections.length - 1];
+            first.point = [first.point[0], first.point[1] - marginLatDeg];
+            last.point = [last.point[0], last.point[1] + marginLatDeg];
+          }
           lines.push({
             points: sortedIntersections,
             coordinate: currentLng,
@@ -233,7 +393,6 @@ export class FlightPathService {
     // 构建航线路径
     const flightPath: Point[] = [startPoint];
     const waypoints: Point[] = [];
-    let currentPoint = startPoint;
     let isForward = true;
 
     // 从第一条线开始处理每条线
@@ -253,7 +412,6 @@ export class FlightPathService {
           flightPath.push(endPointItem.point);
           waypoints.push(startPointItem.point);
           waypoints.push(endPointItem.point);
-          currentPoint = endPointItem.point;
         }
       } else {
         // 反向飞行
@@ -265,7 +423,6 @@ export class FlightPathService {
           flightPath.push(endPointItem.point);
           waypoints.push(startPointItem.point);
           waypoints.push(endPointItem.point);
-          currentPoint = endPointItem.point;
         }
       }
 

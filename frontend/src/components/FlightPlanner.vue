@@ -54,6 +54,32 @@
           />
           <span><span class="spacingValue">{{ currentSpacing }}</span>m</span>
         </div>
+        <div class="angleControl">
+          <span>角度</span>
+          <input
+            type="range"
+            class="angleSlider"
+            min="-90"
+            max="90"
+            v-model.number="currentAngle"
+            step="1"
+            @input="updateFlightPath"
+          />
+          <span><span class="angleValue">{{ currentAngle }}</span>°</span>
+        </div>
+        <div class="marginControl">
+          <span>边距</span>
+          <input
+            type="range"
+            class="marginSlider"
+            min="0"
+            max="5000"
+            v-model.number="currentMargin"
+            step="50"
+            @input="updateFlightPath"
+          />
+          <span><span class="marginValue">{{ currentMargin }}</span>m</span>
+        </div>
         <button class="directionButton" @click="toggleDirection">
           切换为{{ currentDirection === 'horizontal' ? '垂直' : '水平' }}扫描
         </button>
@@ -152,6 +178,8 @@ const isPickingEnd = ref(false)
 const pickerStatus = ref('')
 const currentSpacing = ref(350)
 const currentDirection = ref<'horizontal' | 'vertical'>('horizontal')
+const currentAngle = ref(0)
+const currentMargin = ref(0)
 const showPath = ref(true)
 const showWaypoints = ref(false)
 const currentSpeed = ref(10)
@@ -168,6 +196,8 @@ let droneMarker: any = null
 let animationInterval: number | null = null
 let currentPathIndex = 0
 let satelliteLayer: any = null
+type FlightOverlayType = 'line' | 'waypoint' | 'drone'
+const flightOverlays: any[] = []
 
 // 航线数据
 const path = ref<[number, number][]>([
@@ -293,6 +323,50 @@ function togglePickEnd() {
   pickerStatus.value = isPickingEnd.value ? '请在地图上点击选择降落点位置' : ''
 }
 
+function registerFlightOverlay(overlay: any, type: FlightOverlayType) {
+  if (!overlay) return
+  ;(overlay as any).__flightPath = true
+  ;(overlay as any).__flightType = type
+  flightOverlays.push(overlay)
+}
+
+function removeFlightOverlaysByType(type: FlightOverlayType) {
+  for (let i = flightOverlays.length - 1; i >= 0; i--) {
+    const overlay = flightOverlays[i]
+    if ((overlay as any).__flightType === type) {
+      if (overlay?.setMap) {
+        overlay.setMap(null)
+      } else if (map) {
+        map.remove(overlay)
+      }
+      flightOverlays.splice(i, 1)
+    }
+  }
+  if (type === 'line') {
+    flightLine = null
+  }
+  if (type === 'drone') {
+    droneMarker = null
+  }
+}
+
+function clearFlightOverlays() {
+  for (let i = flightOverlays.length - 1; i >= 0; i--) {
+    const overlay = flightOverlays[i]
+    if (overlay?.setMap) {
+      overlay.setMap(null)
+    } else if (map) {
+      map.remove(overlay)
+    }
+  }
+  flightOverlays.length = 0
+  flightLine = null
+  if (droneMarker) {
+    droneMarker.setMap(null)
+    droneMarker = null
+  }
+}
+
 function toggleDirection() {
   currentDirection.value = currentDirection.value === 'horizontal' ? 'vertical' : 'horizontal'
   updateFlightPath()
@@ -301,17 +375,8 @@ function toggleDirection() {
 async function updateFlightPath() {
   if (!map) return
 
-  if (flightLine) {
-    map.remove(flightLine)
-    flightLine = null
-  }
-
-  const allMarkers = map.getAllOverlays('marker')
-  allMarkers.forEach((marker: any) => {
-    if (marker !== startMarker && marker !== endMarker) {
-      map.remove(marker)
-    }
-  })
+  stopSimulation()
+  clearFlightOverlays()
 
   if (!startPoint.value) return
 
@@ -322,7 +387,9 @@ async function updateFlightPath() {
       spacing: currentSpacing.value,
       startPoint: startPoint.value,
       direction: currentDirection.value,
-      endPoint: endPoint.value || undefined
+      endPoint: endPoint.value || undefined,
+      angle: currentAngle.value,
+      margin: currentMargin.value
     })
 
     // 转换响应数据格式
@@ -342,7 +409,7 @@ async function updateFlightPath() {
       showDir: true,
       dirColor: '#ff0000'
     })
-
+    registerFlightOverlay(flightLine, 'line')
     if (showPath.value) {
       map.add(flightLine)
     }
@@ -360,21 +427,18 @@ async function updateFlightPath() {
 
 function toggleWaypoints(e: Event) {
   const target = e.target as HTMLInputElement
-  const allMarkers = map.getAllOverlays('marker')
-  allMarkers.forEach((marker: any) => {
-    if (marker !== startMarker && marker !== endMarker) {
-      map.remove(marker)
-    }
-  })
+  removeFlightOverlaysByType('waypoint')
 
   if (target.checked && flightData.value.waypoints.length > 0) {
     flightData.value.waypoints.forEach((point, index) => {
-      new (window as any).AMap.Marker({
+      const waypointMarker = new (window as any).AMap.Marker({
         position: point,
         offset: new (window as any).AMap.Pixel(-10, -10),
         content: `<div style="background-color: #fff; padding: 3px 8px; border: 2px solid #0000FF; border-radius: 50%; color: #0000FF; font-weight: bold;">${index + 1}</div>`,
         zIndex: 52
-      }).setMap(map)
+      })
+      waypointMarker.setMap(map)
+      registerFlightOverlay(waypointMarker, 'waypoint')
     })
   }
 }
@@ -394,6 +458,7 @@ function simulateFlight() {
   currentPathIndex = 0
 
   if (!droneMarker) {
+    removeFlightOverlaysByType('drone')
     droneMarker = new (window as any).AMap.Marker({
       position: flightData.value.path[0],
       content: '<div style="background-color: #FF4444; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 8px rgba(0,0,0,0.5);"></div>',
@@ -401,6 +466,7 @@ function simulateFlight() {
       zIndex: 100
     })
     droneMarker.setMap(map)
+    registerFlightOverlay(droneMarker, 'drone')
   }
 
   startAnimation()
@@ -408,10 +474,7 @@ function simulateFlight() {
 
 function stopSimulation() {
   if (animationInterval) clearInterval(animationInterval)
-  if (droneMarker) {
-    droneMarker.setMap(null)
-    droneMarker = null
-  }
+  removeFlightOverlaysByType('drone')
   isSimulating.value = false
   currentPathIndex = 0
 }
@@ -713,7 +776,9 @@ textarea:focus {
 }
 
 .spacingControl,
-.speedControl {
+.speedControl,
+.angleControl,
+.marginControl {
   background: rgba(247, 248, 250, 0.6);
   padding: 12px;
   border-radius: 12px;
@@ -725,7 +790,9 @@ textarea:focus {
 }
 
 .spacingControl span,
-.speedControl span {
+.speedControl span,
+.angleControl span,
+.marginControl span {
   color: #666;
   font-size: 13px;
   font-weight: 500;
@@ -733,7 +800,9 @@ textarea:focus {
 }
 
 .spacingValue,
-.speedValue {
+.speedValue,
+.angleValue,
+.marginValue {
   color: #1890ff;
   font-weight: 600;
   min-width: 24px;

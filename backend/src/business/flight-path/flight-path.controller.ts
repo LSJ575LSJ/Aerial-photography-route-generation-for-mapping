@@ -23,6 +23,8 @@ export class FlightPathController {
     const endPoint: [number, number] | null = body.endPoint
       ? [body.endPoint[0], body.endPoint[1]]
       : null;
+    const angle = body.angle ?? 0;
+    const margin = body.margin ?? 0;
 
     // 调用 Service 生成航线
     const result = this.flightPathService.generateFlightPath(
@@ -31,6 +33,8 @@ export class FlightPathController {
       startPoint,
       body.direction || 'horizontal',
       endPoint,
+      angle,
+      margin,
     );
 
     // 转换结果到响应格式

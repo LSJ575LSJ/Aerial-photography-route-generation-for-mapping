@@ -50,6 +50,8 @@ export interface GeneratePathRequest {
   startPoint: number[];  // [lng, lat]
   direction?: 'horizontal' | 'vertical';
   endPoint?: number[];   // [lng, lat] | null
+  angle?: number;        // 扫描角度（度）
+  margin?: number;       // 边距（米）
 }
 
 /**
