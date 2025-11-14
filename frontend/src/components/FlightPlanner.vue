@@ -1,122 +1,45 @@
 <template>
   <div class="flight-planner">
     <!-- 左侧面板 -->
-    <div class="leftPanel">
-      <div class="systemTitle">无人机飞行路线规划</div>
-
-      <!-- 目标区域设置 -->
-      <div class="panel-section section-target-area">
-        <div class="panel-title">目标区域设置</div>
-        <textarea v-model="geojsonInput" placeholder="输入GeoJSON数据..."></textarea>
-        <button @click="applyGeojson">应用</button>
-      </div>
-
-      <div class="section-divider"></div>
-
-      <!-- 路线设置 -->
-      <div class="panel-section section-route-settings">
-        <div class="panel-title">路线设置</div>
-        <div class="pointPickerControl">
-          <button
-            class="startPointPicker"
-            :class="{ active: isPickingStart }"
-            @click="togglePickStart"
-          >
-            设置起飞点
-          </button>
-          <div class="coord-display">
-            <span>起飞点：</span>
-            <span class="startPointCoord">{{ startPoint ? formatCoord(startPoint) : '未设置' }}</span>
-          </div>
-          <button
-            class="endPointPicker"
-            :class="{ active: isPickingEnd }"
-            @click="togglePickEnd"
-          >
-            设置降落点
-          </button>
-          <div class="coord-display">
-            <span>降落点：</span>
-            <span class="endPointCoord">{{ endPoint ? formatCoord(endPoint) : '未设置' }}</span>
-          </div>
-          <div class="pickerStatus">{{ pickerStatus }}</div>
-        </div>
-        <div class="spacingControl">
-          <span>间距</span>
-          <input
-            type="range"
-            class="spacingSlider"
-            min="100"
-            max="1000"
-            v-model.number="currentSpacing"
-            step="50"
-            @input="updateFlightPath"
-          />
-          <span><span class="spacingValue">{{ currentSpacing }}</span>m</span>
-        </div>
-        <div class="angleControl">
-          <span>角度</span>
-          <input
-            type="range"
-            class="angleSlider"
-            min="-90"
-            max="90"
-            v-model.number="currentAngle"
-            step="1"
-            @input="updateFlightPath"
-          />
-          <span><span class="angleValue">{{ currentAngle }}</span>°</span>
-        </div>
-        <div class="marginControl">
-          <span>边距</span>
-          <input
-            type="range"
-            class="marginSlider"
-            min="0"
-            max="5000"
-            v-model.number="currentMargin"
-            step="50"
-            @input="updateFlightPath"
-          />
-          <span><span class="marginValue">{{ currentMargin }}</span>m</span>
-        </div>
-        <button class="directionButton" @click="toggleDirection">
-          切换为{{ currentDirection === 'horizontal' ? '垂直' : '水平' }}扫描
-        </button>
-      </div>
-
-      <div class="section-divider"></div>
-
-      <!-- 结果显示 -->
-      <div class="panel-section section-results">
-        <div class="panel-title">结果显示</div>
-        <div class="showPathControl">
-          <div class="checkbox-group">
-            <input type="checkbox" id="showPath" class="showPath" v-model="showPath" />
-            <label for="showPath">显示航线</label>
-          </div>
-          <div class="checkbox-group">
-            <input type="checkbox" id="showWaypoints" class="showWaypoints" v-model="showWaypoints" @change="toggleWaypoints" />
-            <label for="showWaypoints">显示航点</label>
-          </div>
-        </div>
-
-        <div class="speedControl">
-          速度：<input
-            type="range"
-            class="speedSlider"
-            min="0"
-            max="100"
-            v-model.number="currentSpeed"
-            step="1"
-          />
-          <span class="speedValue">{{ currentSpeed }}</span>倍
-        </div>
-        <button class="simulateButton" @click="simulateFlight">
-          {{ isSimulating ? '停止模拟' : '模拟飞行' }}
-        </button>
-        <button class="exportGeojson" @click="exportGeojson">导出航线</button>
-      </div>
+    <div class="left-panel-wrapper">
+      <RouteSettingsPanel
+        :geojsonInput="geojsonInput"
+        @update:geojsonInput="(val) => geojsonInput = val"
+        :spacing="currentSpacing"
+        @update:spacing="(val) => currentSpacing = val"
+        :angle="currentAngle"
+        @update:angle="(val) => currentAngle = val"
+        :margin="currentMargin"
+        @update:margin="(val) => currentMargin = val"
+        :showPath="showPath"
+        @update:showPath="(val) => showPath = val"
+        :showWaypoints="showWaypoints"
+        @update:showWaypoints="(val) => showWaypoints = val"
+        :speed="currentSpeed"
+        @update:speed="(val) => currentSpeed = val"
+        :startPoint="startPoint"
+        :endPoint="endPoint"
+        :isPickingStart="isPickingStart"
+        :isPickingEnd="isPickingEnd"
+        :pickerStatus="pickerStatus"
+        :direction="currentDirection"
+        :isSimulating="isSimulating"
+        :isDrawing="isDrawing"
+        :drawingStatus="drawingStatus"
+        :cameraWidth="props.cameraWidth"
+        @toggle-pick-start="togglePickStart"
+        @toggle-pick-end="togglePickEnd"
+        @toggle-direction="toggleDirection"
+        @apply-geojson="applyGeojson"
+        @toggle-draw="toggleDraw"
+        @spacing-change="updateFlightPath"
+        @angle-change="updateFlightPath"
+        @margin-change="updateFlightPath"
+        @show-path-change="handleShowPathChange"
+        @show-waypoints-change="handleShowWaypointsChange"
+        @simulate="simulateFlight"
+        @export="exportGeojson"
+      />
     </div>
 
     <!-- 地图类型控制 -->
@@ -168,6 +91,15 @@ import {
   calculatePathLength
 } from '@/utils/flightPath'
 import { httpClient } from '@/router/utils/http'
+import RouteSettingsPanel from './RouteSettingsPanel.vue'
+
+interface Props {
+  cameraWidth?: number | null
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  cameraWidth: null
+})
 
 // ========== 状态 ==========
 const geojsonInput = ref<string>('')
@@ -185,6 +117,8 @@ const showWaypoints = ref(false)
 const currentSpeed = ref(10)
 const isSimulating = ref(false)
 const mapType = ref<'normal' | 'satellite'>('normal')
+const isDrawing = ref(false)
+const drawingStatus = ref('')
 
 // 地图相关
 let map: any = null
@@ -198,6 +132,11 @@ let currentPathIndex = 0
 let satelliteLayer: any = null
 type FlightOverlayType = 'line' | 'waypoint' | 'drone'
 const flightOverlays: any[] = []
+
+// 绘制相关
+let drawingPoints: [number, number][] = []
+let drawingPolyline: any = null
+let drawingMarkers: any[] = []
 
 // 航线数据
 const path = ref<[number, number][]>([
@@ -221,15 +160,25 @@ onMounted(() => {
   initMap()
   initDefaultGeojson()
   updateFlightPath()
+  window.addEventListener('resize', handleWindowResize)
 })
 
 onBeforeUnmount(() => {
   if (animationInterval) clearInterval(animationInterval)
+  window.removeEventListener('resize', handleWindowResize)
 })
 
 // ========== 方法 ==========
 function formatCoord(coord: [number, number]): string {
   return `${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}`
+}
+
+function handleWindowResize() {
+  try {
+    if (map) {
+      map.resize()
+    }
+  } catch (_) {}
 }
 
 function initMap() {
@@ -268,6 +217,10 @@ function createMapInstance() {
   }
 
   map.setFitView()
+  // 初始化后强制一次重绘，避免偶发首次白屏
+  try {
+    map.resize()
+  } catch (_) {}
 }
 
 function createMarker(position: [number, number], title: string, isStart: boolean) {
@@ -290,9 +243,47 @@ function createMarker(position: [number, number], title: string, isStart: boolea
 }
 
 function handleMapClick(e: any) {
-  if (!isPickingStart.value && !isPickingEnd.value) return
-
   const coords: [number, number] = [e.lnglat.getLng(), e.lnglat.getLat()]
+
+  // 绘制模式
+  if (isDrawing.value) {
+    drawingPoints.push(coords)
+    
+    // 添加标记点
+    const marker = new (window as any).AMap.Marker({
+      position: coords,
+      icon: new (window as any).AMap.Icon({
+        size: new (window as any).AMap.Size(20, 20),
+        image: 'https://a.amap.com/jsapi_demos/static/demo-center/icons/poi-marker-default.png',
+        imageSize: new (window as any).AMap.Size(20, 20)
+      }),
+      zIndex: 100
+    })
+    marker.setMap(map)
+    drawingMarkers.push(marker)
+    
+    // 更新预览线
+    if (drawingPoints.length > 1) {
+      if (drawingPolyline) {
+        drawingPolyline.setPath(drawingPoints)
+      } else {
+        drawingPolyline = new (window as any).AMap.Polyline({
+          path: drawingPoints,
+          strokeColor: '#FF6600',
+          strokeWeight: 2,
+          strokeStyle: 'dashed',
+          zIndex: 99
+        })
+        drawingPolyline.setMap(map)
+      }
+    }
+    
+    drawingStatus.value = `已添加 ${drawingPoints.length} 个点，继续点击添加或点击"完成绘制"结束`
+    return
+  }
+
+  // 原有的起飞点/降落点选择逻辑
+  if (!isPickingStart.value && !isPickingEnd.value) return
 
   if (isPickingStart.value) {
     startPoint.value = coords
@@ -313,14 +304,86 @@ function handleMapClick(e: any) {
 
 function togglePickStart() {
   isPickingEnd.value = false
+  if (isDrawing.value) {
+    clearDrawing()
+    isDrawing.value = false
+    drawingStatus.value = ''
+  }
   isPickingStart.value = !isPickingStart.value
   pickerStatus.value = isPickingStart.value ? '请在地图上点击选择起飞点位置' : ''
 }
 
 function togglePickEnd() {
   isPickingStart.value = false
+  if (isDrawing.value) {
+    clearDrawing()
+    isDrawing.value = false
+    drawingStatus.value = ''
+  }
   isPickingEnd.value = !isPickingEnd.value
   pickerStatus.value = isPickingEnd.value ? '请在地图上点击选择降落点位置' : ''
+}
+
+function toggleDraw() {
+  if (isDrawing.value) {
+    // 完成绘制
+    if (drawingPoints.length < 3) {
+      alert('至少需要3个点才能构成多边形')
+      return
+    }
+    
+    // 闭合多边形（添加第一个点作为最后一个点）
+    const firstPoint = drawingPoints[0]
+    if (!firstPoint) return
+    const closedPath: [number, number][] = [...drawingPoints, firstPoint]
+    
+    // 生成 GeoJSON
+    const geojson = {
+      type: 'Feature',
+      geometry: {
+        type: 'Polygon',
+        coordinates: [closedPath]
+      }
+    }
+    
+    geojsonInput.value = JSON.stringify(geojson, null, 2)
+    
+    // 应用 GeoJSON
+    path.value = closedPath
+    polygon.setPath(closedPath)
+    updateFlightPath()
+    map.setFitView()
+    
+    // 清理绘制状态
+    clearDrawing()
+    isDrawing.value = false
+    drawingStatus.value = ''
+  } else {
+    // 开始绘制
+    isPickingStart.value = false
+    isPickingEnd.value = false
+    pickerStatus.value = ''
+    clearDrawing()
+    isDrawing.value = true
+    drawingStatus.value = '请在地图上点击添加多边形顶点（至少3个点）'
+  }
+}
+
+function clearDrawing() {
+  // 清除标记点
+  drawingMarkers.forEach(marker => {
+    marker.setMap(null)
+  })
+  drawingMarkers = []
+  
+  // 清除预览线
+  if (drawingPolyline) {
+    drawingPolyline.setMap(null)
+    drawingPolyline = null
+  }
+  
+  // 清空点集合
+  drawingPoints = []
 }
 
 function registerFlightOverlay(overlay: any, type: FlightOverlayType) {
@@ -370,6 +433,19 @@ function clearFlightOverlays() {
 function toggleDirection() {
   currentDirection.value = currentDirection.value === 'horizontal' ? 'vertical' : 'horizontal'
   updateFlightPath()
+}
+
+function handleShowPathChange(value: boolean) {
+  if (!map || !flightLine) return
+  if (value) {
+    map.add(flightLine)
+  } else {
+    map.remove(flightLine)
+  }
+}
+
+function handleShowWaypointsChange(value: boolean) {
+  toggleWaypoints({ target: { checked: value } } as any)
 }
 
 async function updateFlightPath() {
@@ -650,299 +726,21 @@ body,
   z-index: 0;
 }
 
-/* 左侧面板样式 */
-.leftPanel {
+.flight-planner {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* 左侧面板包装器 */
+.left-panel-wrapper {
   position: absolute;
   top: 20px;
   left: 20px;
-  width: 320px;
-  max-height: calc(100vh - 40px);
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   z-index: 1000;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  font-size: 13px;
-  display: flex;
-  flex-direction: column;
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  overflow-y: auto;
+  overflow: visible;
 }
 
-.leftPanel .panel-section {
-  padding: 16px;
-  position: relative;
-}
-
-.leftPanel .panel-section::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: linear-gradient(90deg, 
-      rgba(24, 144, 255, 0.1) 0%,
-      rgba(24, 144, 255, 0.05) 100%);
-}
-
-.leftPanel .panel-section:first-child::before {
-  display: none;
-}
-
-.leftPanel .panel-title {
-  color: #1a1a1a;
-  font-weight: 600;
-  margin-bottom: 20px;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  letter-spacing: 0.5px;
-  position: relative;
-}
-
-.leftPanel .panel-title::before {
-  content: '';
-  width: 4px;
-  height: 18px;
-  background: linear-gradient(180deg, #1890ff 0%, #40a9ff 100%);
-  margin-right: 12px;
-  border-radius: 2px;
-  transition: all 0.3s ease;
-}
-
-.leftPanel .panel-section:hover .panel-title::before {
-  background: #40a9ff;
-  transform: scaleY(1.1);
-}
-
-textarea {
-  width: 100%;
-  height: 80px;
-  padding: 16px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 12px;
-  resize: none;
-  font-size: 13px;
-  font-family: 'JetBrains Mono', 'Monaco', monospace;
-  box-sizing: border-box;
-  margin-bottom: 16px;
-  background: rgba(247, 248, 250, 0.6);
-  transition: all 0.3s ease;
-  line-height: 1.5;
-}
-
-textarea:focus {
-  border-color: #40a9ff;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.1);
-  outline: none;
-}
-
-.leftPanel button {
-  height: 32px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.8);
-  cursor: pointer;
-  padding: 0 16px;
-  font-size: 13px;
-  color: #666;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  margin-bottom: 8px;
-  font-weight: 400;
-  letter-spacing: 0.3px;
-  backdrop-filter: blur(8px);
-}
-
-.leftPanel button:hover {
-  background: rgba(255, 255, 255, 0.95);
-  border-color: rgba(24, 144, 255, 0.3);
-  color: #1890ff;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.1);
-}
-
-.leftPanel button.active {
-  background: #e6f7ff;
-  border-color: #1890ff;
-  color: #1890ff;
-  font-weight: 600;
-}
-
-.spacingControl,
-.speedControl,
-.angleControl,
-.marginControl {
-  background: rgba(247, 248, 250, 0.6);
-  padding: 12px;
-  border-radius: 12px;
-  margin: 8px 0;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.spacingControl span,
-.speedControl span,
-.angleControl span,
-.marginControl span {
-  color: #666;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.spacingValue,
-.speedValue,
-.angleValue,
-.marginValue {
-  color: #1890ff;
-  font-weight: 600;
-  min-width: 24px;
-  display: inline-block;
-  text-align: right;
-  background: rgba(24, 144, 255, 0.06);
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.coord-display {
-  font-size: 13px;
-  color: #666;
-  margin: 8px 0 16px 0;
-  padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.8);
-  border-radius: 8px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.coord-display:last-child {
-  margin-bottom: 0;
-}
-
-.coord-display span:first-child {
-  color: #666;
-  font-weight: 500;
-}
-
-.coord-display span:last-child {
-  color: #1890ff;
-  font-family: 'JetBrains Mono', 'Monaco', monospace;
-  font-size: 13px;
-  font-weight: 500;
-  background: rgba(24, 144, 255, 0.06);
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.pickerStatus {
-  font-size: 13px;
-  color: #666;
-  text-align: center;
-  padding: 8px 0;
-  transition: all 0.3s ease;
-  background: rgba(24, 144, 255, 0.06);
-  border-radius: 8px;
-}
-
-input[type="range"] {
-  -webkit-appearance: none;
-  width: 100%;
-  height: 4px;
-  background: #e1e1e1;
-  border-radius: 2px;
-  outline: none;
-  margin: 16px 0 8px 0;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 20px;
-  height: 20px;
-  background: linear-gradient(180deg, #fff 0%, #f7f7f7 100%);
-  border: 2px solid #1890ff;
-  border-radius: 50%;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  transition: all 0.2s ease;
-}
-
-input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
-  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
-}
-
-.showPathControl {
-  background: rgba(255, 255, 255, 0.8);
-  padding: 16px;
-  border-radius: 8px;
-  margin: 0 0 16px 0;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-.showPathControl .checkbox-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.showPathControl .checkbox-group label {
-  color: #666;
-  font-size: 13px;
-  font-weight: 500;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.showPathControl input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  cursor: pointer;
-  -webkit-appearance: none;
-  border: 2px solid rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
-  background: #fff;
-}
-
-.showPathControl input[type="checkbox"]:checked {
-  background: #1890ff;
-  border-color: #1890ff;
-}
-
-.showPathControl input[type="checkbox"]:checked::after {
-  content: '✓';
-  position: absolute;
-  color: white;
-  font-size: 14px;
-  font-weight: bold;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.section-divider {
-  height: 16px;
-  background: linear-gradient(90deg,
-      rgba(24, 144, 255, 0.02) 0%,
-      rgba(24, 144, 255, 0.04) 50%,
-      rgba(24, 144, 255, 0.02) 100%);
-  margin: 0;
-  border: none;
-}
 
 .mapTypeControl {
   position: absolute;
@@ -1026,49 +824,4 @@ input[type="range"]::-webkit-slider-thumb:hover {
   font-weight: 500;
 }
 
-.exportGeojson {
-  height: 44px !important;
-  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%) !important;
-  color: white !important;
-  border: none !important;
-  font-weight: 600 !important;
-  font-size: 15px !important;
-  letter-spacing: 1px !important;
-  border-radius: 12px !important;
-  margin-top: 20px !important;
-  box-shadow: 0 4px 12px rgba(24, 144, 255, 0.15) !important;
-  width: 100%;
-}
-
-.exportGeojson:hover {
-  transform: translateY(-2px) !important;
-  box-shadow: 0 6px 16px rgba(24, 144, 255, 0.25) !important;
-  background: linear-gradient(135deg, #40a9ff 0%, #1890ff 100%) !important;
-}
-
-.simulateButton {
-  background: rgba(0, 200, 83, 0.1) !important;
-  color: #00c853 !important;
-  border: 1px solid rgba(0, 200, 83, 0.2) !important;
-  font-weight: 500 !important;
-  width: 100%;
-  height: 32px;
-  border-radius: 8px;
-  margin-top: 12px;
-}
-
-.simulateButton:hover {
-  background: rgba(0, 200, 83, 0.15) !important;
-  border-color: rgba(0, 200, 83, 0.3) !important;
-  box-shadow: 0 2px 8px rgba(0, 200, 83, 0.1) !important;
-}
-
-.systemTitle {
-  font-size: large;
-  padding: 10px;
-  background-color: #1890ff;
-  color: white;
-  text-align: center;
-  font-weight: bold;
-}
 </style>

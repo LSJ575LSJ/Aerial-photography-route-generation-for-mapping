@@ -1,10 +1,23 @@
 <!-- src/App.vue -->
 <template>
-  <FlightPlanner />
+  <div class="app-container">
+    <FlightPlanner :cameraWidth="cameraWidth" />
+    <div class="camera-card-container">
+      <CameraCard @width-change="handleWidthChange" />
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import FlightPlanner from '@/components/FlightPlanner.vue'
+import CameraCard from '@/components/CameraCard.vue'
+
+const cameraWidth = ref<number | null>(null)
+
+function handleWidthChange(width: number | null) {
+  cameraWidth.value = width
+}
 </script>
 
 <style>
@@ -13,5 +26,18 @@ body, html, #app {
   padding: 0;
   height: 100%;
   overflow: hidden;
+}
+
+.app-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.camera-card-container {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2000;
 }
 </style>
