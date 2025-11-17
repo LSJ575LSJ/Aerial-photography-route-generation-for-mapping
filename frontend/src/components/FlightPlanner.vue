@@ -22,14 +22,12 @@
         :isPickingStart="isPickingStart"
         :isPickingEnd="isPickingEnd"
         :pickerStatus="pickerStatus"
-        :direction="currentDirection"
         :isSimulating="isSimulating"
         :isDrawing="isDrawing"
         :drawingStatus="drawingStatus"
         :cameraWidth="props.cameraWidth"
         @toggle-pick-start="togglePickStart"
         @toggle-pick-end="togglePickEnd"
-        @toggle-direction="toggleDirection"
         @apply-geojson="applyGeojson"
         @toggle-draw="toggleDraw"
         @spacing-change="updateFlightPath"
@@ -109,7 +107,6 @@ const isPickingStart = ref(false)
 const isPickingEnd = ref(false)
 const pickerStatus = ref('')
 const currentSpacing = ref(350)
-const currentDirection = ref<'horizontal' | 'vertical'>('horizontal')
 const currentAngle = ref(0)
 const currentMargin = ref(0)
 const showPath = ref(true)
@@ -430,11 +427,6 @@ function clearFlightOverlays() {
   }
 }
 
-function toggleDirection() {
-  currentDirection.value = currentDirection.value === 'horizontal' ? 'vertical' : 'horizontal'
-  updateFlightPath()
-}
-
 function handleShowPathChange(value: boolean) {
   if (!map || !flightLine) return
   if (value) {
@@ -457,12 +449,11 @@ async function updateFlightPath() {
   if (!startPoint.value) return
 
   try {
-    // 调用后端 API 生成航线
+    // 调用后端 API 生成航线（固定使用水平扫描，通过 angle 参数控制方向）
     const response = await httpClient.post('/flight-path/generate', {
       polygon: path.value.slice(0, -1),
       spacing: currentSpacing.value,
       startPoint: startPoint.value,
-      direction: currentDirection.value,
       endPoint: endPoint.value || undefined,
       angle: currentAngle.value,
       margin: currentMargin.value
@@ -506,7 +497,6 @@ async function updateFlightPath() {
       polygon: path.value.slice(0, -1),
       spacing: currentSpacing.value,
       startPoint: startPoint.value,
-      direction: currentDirection.value,
       endPoint: endPoint.value || undefined,
       angle: currentAngle.value,
       margin: currentMargin.value
@@ -658,7 +648,7 @@ function exportGeojson() {
           name: '航线路径',
           spacing: currentSpacing.value,
           totalLength: calculatePathLength(flightData.value.path),
-          direction: currentDirection.value
+          angle: currentAngle.value
         }
       },
       ...(startPoint.value

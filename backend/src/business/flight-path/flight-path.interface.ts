@@ -48,9 +48,8 @@ export interface GeneratePathRequest {
   polygon: number[][];  // [[lng, lat], [lng, lat], ...]
   spacing: number;
   startPoint: number[];  // [lng, lat]
-  direction?: 'horizontal' | 'vertical';
   endPoint?: number[];   // [lng, lat] | null
-  angle?: number;        // 扫描角度（度）
+  angle?: number;        // 扫描角度（度），0-180°，固定使用水平扫描后旋转
   margin?: number;       // 边距（米）
 }
 

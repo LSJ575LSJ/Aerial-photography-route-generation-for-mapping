@@ -19,7 +19,6 @@ export class FlightPathController {
       polygon: body.polygon?.length || 0,
       spacing: body.spacing,
       startPoint: body.startPoint,
-      direction: body.direction,
       endPoint: body.endPoint,
       angle: body.angle,
       margin: body.margin,
@@ -57,12 +56,11 @@ export class FlightPathController {
       this.logger.log('开始生成航线...');
       const startTime = Date.now();
 
-      // 调用 Service 生成航线
+      // 调用 Service 生成航线（固定使用水平扫描，通过 angle 参数控制方向）
       const result = this.flightPathService.generateFlightPath(
         polygon,
         body.spacing,
         startPoint,
-        body.direction || 'horizontal',
         endPoint,
         angle,
         margin,

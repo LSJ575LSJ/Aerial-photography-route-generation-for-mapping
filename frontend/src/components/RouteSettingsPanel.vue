@@ -104,8 +104,8 @@
             <el-slider
               :model-value="angle"
               @update:model-value="handleAngleChange"
-              :min="-90"
-              :max="90"
+              :min="0"
+              :max="180"
               :step="1"
               show-input
             />
@@ -121,17 +121,6 @@
               :step="50"
               show-input
             />
-          </el-form-item>
-
-          <!-- 扫描方向 -->
-          <el-form-item>
-            <el-button
-              type="default"
-              @click="handleToggleDirection"
-              style="width: 100%"
-            >
-              切换为{{ direction === 'horizontal' ? '垂直' : '水平' }}扫描
-            </el-button>
           </el-form-item>
         </el-form>
       </el-collapse-item>
@@ -193,7 +182,6 @@ interface Props {
   spacing: number
   angle: number
   margin: number
-  direction: 'horizontal' | 'vertical'
   showPath: boolean
   showWaypoints: boolean
   speed: number
@@ -215,7 +203,6 @@ const emit = defineEmits<{
   'update:speed': [value: number]
   'toggle-pick-start': []
   'toggle-pick-end': []
-  'toggle-direction': []
   'apply-geojson': []
   'simulate': []
   'export': []
@@ -275,10 +262,6 @@ function handleTogglePickStart() {
 
 function handleTogglePickEnd() {
   emit('toggle-pick-end')
-}
-
-function handleToggleDirection() {
-  emit('toggle-direction')
 }
 
 function handleGeojsonInputChange(val: string) {

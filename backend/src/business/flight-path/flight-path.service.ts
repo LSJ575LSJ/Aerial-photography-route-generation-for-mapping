@@ -234,21 +234,20 @@ export class FlightPathService {
    * @param polygon - 多边形区域的顶点坐标数组，每个顶点为[经度, 纬度]
    * @param spacing - 航线间距，单位：米
    * @param startPoint - 起飞点坐标 [经度, 纬度]
-   * @param direction - 扫描方向，可选值：'horizontal'（水平）或'vertical'（垂直），默认为 'horizontal'
    * @param endPoint - 终点坐标 [经度, 纬度]，如果不设置则使用起飞点作为终点
-   * @param angle - 航线相对于水平轴的旋转角度（度），正数为顺时针
+   * @param angle - 航线相对于水平轴的旋转角度（度），0-180°，固定使用水平扫描后旋转
+   * @param margin - 边距（米）
    * @returns 返回航线信息对象
    */
   generateFlightPath(
     polygon: Polygon,
     spacing: number,
     startPoint: Point,
-    direction: 'horizontal' | 'vertical' = 'horizontal',
     endPoint: Point | null = null,
     angle = 0,
     margin = 0,
   ): FlightPathResult {
-    this.logger.debug(`开始生成航线 - 多边形点数: ${polygon.length}, 间距: ${spacing}m, 方向: ${direction}, 角度: ${angle}°, 边距: ${margin}m`);
+    this.logger.debug(`开始生成航线 - 多边形点数: ${polygon.length}, 间距: ${spacing}m, 角度: ${angle}°, 边距: ${margin}m`);
     
     try {
       const normalizedPolygon = this.normalizePolygon(polygon);
@@ -282,7 +281,6 @@ export class FlightPathService {
         rotatedPolygon,
         spacing,
         rotatedStart,
-        direction,
         rotatedEnd,
         margin,
       );
@@ -310,19 +308,18 @@ export class FlightPathService {
   }
 
   /**
-   * 在水平/垂直对齐的坐标系中生成航线
+   * 在水平对齐的坐标系中生成航线（固定使用水平扫描）
    * @param polygon - 已对齐的多边形顶点
    * @param spacing - 航线间距
    * @param startPoint - 已对齐的起飞点
-   * @param direction - 扫描方向
    * @param endPoint - 已对齐的降落点
+   * @param margin - 边距（米）
    * @returns 航线结果
    */
   private generateAlignedFlightPath(
     polygon: Polygon,
     spacing: number,
     startPoint: Point,
-    direction: 'horizontal' | 'vertical',
     endPoint: Point | null,
     margin = 0,
   ): FlightPathResult {
@@ -346,8 +343,8 @@ export class FlightPathService {
     const bbox = this.calculateBoundingBox(polygon);
     this.logger.debug(`边界框: min[${bbox.min[0].toFixed(6)}, ${bbox.min[1].toFixed(6)}], max[${bbox.max[0].toFixed(6)}, ${bbox.max[1].toFixed(6)}]`);
     
-    const lines: ScanLine[] = [];
-    const addLines: ScanLine[] = []; // 保存多余交点的扫描线
+    // groups[i] 存储所有平行线的第 i 对交点（即第 2i+1, 2i+2 个交点）
+    const groups: Intersection[][] = [];
     const spacingDegrees = spacing / 111000; // 转换米到度数（粗略）
     const clampedMargin = Math.min(Math.max(margin, 0), 5000);
     
@@ -355,111 +352,44 @@ export class FlightPathService {
       this.logger.warn(`边距值 ${margin}m 被限制到 ${clampedMargin}m (范围: 0-5000m)`);
     }
 
-    if (direction === 'horizontal') {
-      // 水平方向扫描
-      let currentLat = bbox.min[1];
-      while (currentLat <= bbox.max[1]) {
-        // 与多边形求交点的平行线
-        const line: [Point, Point] = [
-          [bbox.min[0] - 0.01, currentLat],
-          [bbox.max[0] + 0.01, currentLat],
-        ];
+    // 水平方向扫描（固定使用水平扫描）
+    let currentLat = bbox.min[1];
+    while (currentLat <= bbox.max[1]) {
+      // 与多边形求交点的平行线
+      const line: [Point, Point] = [
+        [bbox.min[0] - 0.01, currentLat],
+        [bbox.max[0] + 0.01, currentLat],
+      ];
 
-        const intersections = this.findIntersections(line, polygon);
-        if (intersections.length >= 2) {
-          // 对每一层的交点按经度排序
-          const sortedIntersections = intersections.sort(
-            (a, b) => a.point[0] - b.point[0],
-          );
-          if (clampedMargin > 0) {
-            const latRad = (currentLat * Math.PI) / 180;
-            const cosLat = Math.cos(latRad);
-            const metersPerDegLng =
-              Math.max(Math.abs(cosLat), 1e-6) * 111320; // 避免除以0
-            const marginLonDeg = clampedMargin / metersPerDegLng;
-            const first = sortedIntersections[0];
-            const last = sortedIntersections[sortedIntersections.length - 1];
-            first.point = [first.point[0] - marginLonDeg, first.point[1]];
-            last.point = [last.point[0] + marginLonDeg, last.point[1]];
-          }
-          
-          // 保存主路径（前两个交点）
-          lines.push({
-            points: sortedIntersections.slice(0, 2),
-            coordinate: currentLat,
-            isHorizontal: true,
-          });
-          
-          // 如果交点数量大于2，将多余的成对交点保存到 addLines
-          if (sortedIntersections.length > 2) {
-            for (let i = 2; i < sortedIntersections.length; i += 2) {
-              const point1 = sortedIntersections[i];
-              const point2 = sortedIntersections[i + 1];
-              if (point1 && point2) {
-                addLines.push({
-                  points: [point1, point2],
-                  coordinate: currentLat,
-                  isHorizontal: true,
-                });
-              }
-            }
-          }
+      const intersections = this.findIntersections(line, polygon);
+      if (intersections.length >= 2) {
+        // 对每一层的交点按经度排序
+        const sortedIntersections = intersections.sort(
+          (a, b) => a.point[0] - b.point[0],
+        );
+        
+        // 应用边距
+        if (clampedMargin > 0) {
+          const latRad = (currentLat * Math.PI) / 180;
+          const cosLat = Math.cos(latRad);
+          const metersPerDegLng =
+            Math.max(Math.abs(cosLat), 1e-6) * 111320; // 避免除以0
+          const marginLonDeg = clampedMargin / metersPerDegLng;
+          const first = sortedIntersections[0];
+          const last = sortedIntersections[sortedIntersections.length - 1];
+          first.point = [first.point[0] - marginLonDeg, first.point[1]];
+          last.point = [last.point[0] + marginLonDeg, last.point[1]];
         }
-        currentLat += spacingDegrees;
+        
+        // 使用递归方法将当前线的所有交点对分组到 groups
+        this.processIntersectionPairs(sortedIntersections, groups);
       }
-      this.logger.debug(`水平扫描完成，生成 ${lines.length} 条主扫描线，${addLines.length} 条补充扫描线`);
-    } else {
-      // 垂直方向扫描
-      let currentLng = bbox.min[0];
-      while (currentLng <= bbox.max[0]) {
-        const line: [Point, Point] = [
-          [currentLng, bbox.min[1] - 0.01],
-          [currentLng, bbox.max[1] + 0.01],
-        ];
-
-        const intersections = this.findIntersections(line, polygon);
-        if (intersections.length >= 2) {
-          // 对每一层的交点按纬度排序
-          const sortedIntersections = intersections.sort(
-            (a, b) => a.point[1] - b.point[1],
-          );
-          if (clampedMargin > 0) {
-            const metersPerDegLat = 111000;
-            const marginLatDeg = clampedMargin / metersPerDegLat;
-            const first = sortedIntersections[0];
-            const last = sortedIntersections[sortedIntersections.length - 1];
-            first.point = [first.point[0], first.point[1] - marginLatDeg];
-            last.point = [last.point[0], last.point[1] + marginLatDeg];
-          }
-          
-          // 保存主路径（前两个交点）
-          lines.push({
-            points: sortedIntersections.slice(0, 2),
-            coordinate: currentLng,
-            isHorizontal: false,
-          });
-          
-          // 如果交点数量大于2，将多余的成对交点保存到 addLines
-          if (sortedIntersections.length > 2) {
-            for (let i = 2; i < sortedIntersections.length; i += 2) {
-              const point1 = sortedIntersections[i];
-              const point2 = sortedIntersections[i + 1];
-              if (point1 && point2) {
-                addLines.push({
-                  points: [point1, point2],
-                  coordinate: currentLng,
-                  isHorizontal: false,
-                });
-              }
-            }
-          }
-        }
-        currentLng += spacingDegrees;
-      }
-      this.logger.debug(`垂直扫描完成，生成 ${lines.length} 条主扫描线，${addLines.length} 条补充扫描线`);
+      currentLat += spacingDegrees;
     }
+    
+    this.logger.debug(`水平扫描完成，生成 ${groups.length} 个交点对组`);
 
-    if (lines.length === 0) {
+    if (groups.length === 0) {
       this.logger.warn('未生成任何扫描线，可能多边形太小或间距太大');
     }
 
@@ -469,73 +399,33 @@ export class FlightPathService {
     const waypoints: Point[] = [];
     let isForward = true;
 
-    // 先处理主路径（lines）
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line) continue;
-      const points = line.points;
+    // 按 groups 顺序处理：groups[0] → groups[1] → groups[2] ...
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      const group = groups[groupIndex];
+      if (!group || group.length === 0) continue;
 
-      // 确定这条线的起点和终点
-      if (isForward) {
-        // 正向飞行
-        const startPointItem = points[0];
-        const endPointItem = points[1];
+      // 每个 group 内部按顺序处理（保持 zigzag 正反切换）
+      for (let i = 0; i < group.length; i += 2) {
+        const point1 = group[i];
+        const point2 = group[i + 1];
 
-        if (startPointItem && endPointItem) {
-          flightPath.push(startPointItem.point);
-          flightPath.push(endPointItem.point);
-          waypoints.push(startPointItem.point);
-          waypoints.push(endPointItem.point);
-        }
-      } else {
-        // 反向飞行
-        const startPointItem = points[1];
-        const endPointItem = points[0];
-
-        if (startPointItem && endPointItem) {
-          flightPath.push(startPointItem.point);
-          flightPath.push(endPointItem.point);
-          waypoints.push(startPointItem.point);
-          waypoints.push(endPointItem.point);
+        if (point1 && point2) {
+          if (isForward) {
+            // 正向飞行
+            flightPath.push(point1.point);
+            flightPath.push(point2.point);
+            waypoints.push(point1.point);
+            waypoints.push(point2.point);
+          } else {
+            // 反向飞行
+            flightPath.push(point2.point);
+            flightPath.push(point1.point);
+            waypoints.push(point2.point);
+            waypoints.push(point1.point);
+          }
+          isForward = !isForward;
         }
       }
-
-      isForward = !isForward;
-    }
-
-    // 处理补充路径（addLines）- 按顺序飞行，也使用正反切换
-    // 注意：isForward 在主路径处理完后已经切换了，所以补充路径从当前状态继续
-    for (let i = 0; i < addLines.length; i++) {
-      const line = addLines[i];
-      if (!line) continue;
-      const points = line.points;
-
-      // 确定这条线的起点和终点（与主路径一样，使用正反切换）
-      if (isForward) {
-        // 正向飞行
-        const startPointItem = points[0];
-        const endPointItem = points[1];
-
-        if (startPointItem && endPointItem) {
-          flightPath.push(startPointItem.point);
-          flightPath.push(endPointItem.point);
-          waypoints.push(startPointItem.point);
-          waypoints.push(endPointItem.point);
-        }
-      } else {
-        // 反向飞行
-        const startPointItem = points[1];
-        const endPointItem = points[0];
-
-        if (startPointItem && endPointItem) {
-          flightPath.push(startPointItem.point);
-          flightPath.push(endPointItem.point);
-          waypoints.push(startPointItem.point);
-          waypoints.push(endPointItem.point);
-        }
-      }
-
-      isForward = !isForward;
     }
 
     // 添加终点
@@ -548,6 +438,42 @@ export class FlightPathService {
       path: flightPath,
       waypoints: waypoints,
     };
+  }
+
+  /**
+   * 递归处理当前线的所有交点对，动态分组到 groups 数组
+   * groups[i] 存储所有平行线的第 i 对交点（即第 2i+1, 2i+2 个交点）
+   * @param intersections - 当前线的所有交点（已排序）
+   * @param groups - 分组数组，groups[i] 存储所有线的第 i 对交点
+   */
+  private processIntersectionPairs(
+    intersections: Intersection[],
+    groups: Intersection[][],
+  ): void {
+    // 递归处理第 j 对交点
+    function processPair(j: number): void {
+      // 如果当前线没有第 j 对（即 2*j+1 超出长度），停止
+      if (j * 2 + 1 >= intersections.length) return;
+
+      // 动态扩展 groups：如果还没有第 j 组，就新建一个空数组
+      if (j >= groups.length) {
+        groups.push([]);
+      }
+
+      // 把这一对的两个点加入 groups[j]
+      const point1 = intersections[j * 2];
+      const point2 = intersections[j * 2 + 1];
+      if (point1 && point2) {
+        groups[j].push(point1);
+        groups[j].push(point2);
+      }
+
+      // 递归处理下一对
+      processPair(j + 1);
+    }
+
+    // 开始处理当前线的所有交点对（从第0对开始）
+    processPair(0);
   }
 }
 
