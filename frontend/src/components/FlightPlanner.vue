@@ -495,9 +495,44 @@ async function updateFlightPath() {
       fakeEvent.target = { checked: true } as HTMLInputElement
       toggleWaypoints(fakeEvent)
     }
-  } catch (error) {
-    console.error('生成航线失败:', error)
-    alert('生成航线失败，请检查网络连接或后端服务')
+  } catch (error: any) {
+    // 详细的错误日志
+    console.error('========== 生成航线失败 ==========')
+    console.error('错误时间:', new Date().toLocaleString())
+    console.error('错误对象:', error)
+    
+    // 请求参数日志
+    const requestParams = {
+      polygon: path.value.slice(0, -1),
+      spacing: currentSpacing.value,
+      startPoint: startPoint.value,
+      direction: currentDirection.value,
+      endPoint: endPoint.value || undefined,
+      angle: currentAngle.value,
+      margin: currentMargin.value
+    }
+    console.error('请求参数:', JSON.stringify(requestParams, null, 2))
+    
+    // HTTP 错误信息
+    if (error.response) {
+      // 服务器返回了错误响应
+      console.error('HTTP 状态码:', error.response.status)
+      console.error('响应数据:', error.response.data)
+      console.error('响应头:', error.response.headers)
+      alert(`生成航线失败 (${error.response.status}): ${error.response.data?.message || error.response.data || '服务器返回错误'}`)
+    } else if (error.request) {
+      // 请求已发出但没有收到响应
+      console.error('请求已发出，但未收到响应')
+      console.error('请求配置:', error.config)
+      console.error('请求对象:', error.request)
+      alert('生成航线失败: 无法连接到后端服务，请检查网络连接或后端服务是否运行')
+    } else {
+      // 其他错误
+      console.error('错误消息:', error.message)
+      console.error('错误堆栈:', error.stack)
+      alert(`生成航线失败: ${error.message || '未知错误'}`)
+    }
+    console.error('================================')
   }
 }
 

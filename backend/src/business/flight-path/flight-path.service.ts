@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   Point,
   Polygon,
@@ -10,6 +10,7 @@ import {
 
 @Injectable()
 export class FlightPathService {
+  private readonly logger = new Logger(FlightPathService.name);
   /**
    * 计算两点之间的距离
    * @param point1 - 第一个点的坐标 [经度, 纬度]
@@ -247,41 +248,65 @@ export class FlightPathService {
     angle = 0,
     margin = 0,
   ): FlightPathResult {
-    const normalizedPolygon = this.normalizePolygon(polygon);
-    const hasPolygon = normalizedPolygon.length > 0;
-    const rotationCenter = hasPolygon
-      ? this.getPolygonCentroid(normalizedPolygon)
-      : startPoint;
+    this.logger.debug(`开始生成航线 - 多边形点数: ${polygon.length}, 间距: ${spacing}m, 方向: ${direction}, 角度: ${angle}°, 边距: ${margin}m`);
+    
+    try {
+      const normalizedPolygon = this.normalizePolygon(polygon);
+      const hasPolygon = normalizedPolygon.length > 0;
+      
+      if (!hasPolygon) {
+        this.logger.warn('多边形为空，将生成从起飞点到降落点的直线路径');
+      }
+      
+      const rotationCenter = hasPolygon
+        ? this.getPolygonCentroid(normalizedPolygon)
+        : startPoint;
 
-    const rotatedPolygon = hasPolygon
-      ? this.rotatePolygon(normalizedPolygon, rotationCenter, -angle)
-      : normalizedPolygon;
+      this.logger.debug(`旋转中心: [${rotationCenter[0].toFixed(6)}, ${rotationCenter[1].toFixed(6)}]`);
 
-    const rotatedStart = this.rotatePoint(startPoint, rotationCenter, -angle);
-    const rotatedEnd = endPoint
-      ? this.rotatePoint(endPoint, rotationCenter, -angle)
-      : null;
+      const rotatedPolygon = hasPolygon
+        ? this.rotatePolygon(normalizedPolygon, rotationCenter, -angle)
+        : normalizedPolygon;
 
-    const alignedResult = this.generateAlignedFlightPath(
-      rotatedPolygon,
-      spacing,
-      rotatedStart,
-      direction,
-      rotatedEnd,
-      margin,
-    );
+      const rotatedStart = this.rotatePoint(startPoint, rotationCenter, -angle);
+      const rotatedEnd = endPoint
+        ? this.rotatePoint(endPoint, rotationCenter, -angle)
+        : null;
 
-    const path = alignedResult.path.map((point) =>
-      this.rotatePoint(point, rotationCenter, angle),
-    );
-    const waypoints = alignedResult.waypoints.map((point) =>
-      this.rotatePoint(point, rotationCenter, angle),
-    );
+      this.logger.debug(`旋转后的起飞点: [${rotatedStart[0].toFixed(6)}, ${rotatedStart[1].toFixed(6)}]`);
+      if (rotatedEnd) {
+        this.logger.debug(`旋转后的降落点: [${rotatedEnd[0].toFixed(6)}, ${rotatedEnd[1].toFixed(6)}]`);
+      }
 
-    return {
-      path,
-      waypoints,
-    };
+      const alignedResult = this.generateAlignedFlightPath(
+        rotatedPolygon,
+        spacing,
+        rotatedStart,
+        direction,
+        rotatedEnd,
+        margin,
+      );
+
+      this.logger.debug(`对齐坐标系中生成的路径点数: ${alignedResult.path.length}, 航点数: ${alignedResult.waypoints.length}`);
+
+      const path = alignedResult.path.map((point) =>
+        this.rotatePoint(point, rotationCenter, angle),
+      );
+      const waypoints = alignedResult.waypoints.map((point) =>
+        this.rotatePoint(point, rotationCenter, angle),
+      );
+
+      this.logger.debug(`最终路径点数: ${path.length}, 最终航点数: ${waypoints.length}`);
+
+      return {
+        path,
+        waypoints,
+      };
+    } catch (error: any) {
+      this.logger.error(`生成航线时发生错误: ${error.message}`);
+      this.logger.error(`错误堆栈: ${error.stack}`);
+      throw error;
+    }
   }
 
   /**
@@ -302,6 +327,7 @@ export class FlightPathService {
     margin = 0,
   ): FlightPathResult {
     if (polygon.length === 0) {
+      this.logger.debug('多边形为空，生成直线路径');
       const finalPoint = endPoint || startPoint;
       const path: Point[] =
         finalPoint[0] === startPoint[0] && finalPoint[1] === startPoint[1]
@@ -318,10 +344,16 @@ export class FlightPathService {
     }
 
     const bbox = this.calculateBoundingBox(polygon);
+    this.logger.debug(`边界框: min[${bbox.min[0].toFixed(6)}, ${bbox.min[1].toFixed(6)}], max[${bbox.max[0].toFixed(6)}, ${bbox.max[1].toFixed(6)}]`);
+    
     const lines: ScanLine[] = [];
     const addLines: ScanLine[] = []; // 保存多余交点的扫描线
     const spacingDegrees = spacing / 111000; // 转换米到度数（粗略）
     const clampedMargin = Math.min(Math.max(margin, 0), 5000);
+    
+    if (clampedMargin !== margin) {
+      this.logger.warn(`边距值 ${margin}m 被限制到 ${clampedMargin}m (范围: 0-5000m)`);
+    }
 
     if (direction === 'horizontal') {
       // 水平方向扫描
@@ -375,6 +407,7 @@ export class FlightPathService {
         }
         currentLat += spacingDegrees;
       }
+      this.logger.debug(`水平扫描完成，生成 ${lines.length} 条主扫描线，${addLines.length} 条补充扫描线`);
     } else {
       // 垂直方向扫描
       let currentLng = bbox.min[0];
@@ -423,9 +456,15 @@ export class FlightPathService {
         }
         currentLng += spacingDegrees;
       }
+      this.logger.debug(`垂直扫描完成，生成 ${lines.length} 条主扫描线，${addLines.length} 条补充扫描线`);
+    }
+
+    if (lines.length === 0) {
+      this.logger.warn('未生成任何扫描线，可能多边形太小或间距太大');
     }
 
     // 构建航线路径
+    this.logger.debug('开始构建航线路径...');
     const flightPath: Point[] = [startPoint];
     const waypoints: Point[] = [];
     let isForward = true;
@@ -502,6 +541,8 @@ export class FlightPathService {
     // 添加终点
     const finalPoint = endPoint || startPoint;
     flightPath.push(finalPoint);
+
+    this.logger.debug(`航线路径构建完成: 路径点数 ${flightPath.length}, 航点数 ${waypoints.length}`);
 
     return {
       path: flightPath,
