@@ -368,21 +368,13 @@ export class FlightPathService {
           (a, b) => a.point[0] - b.point[0],
         );
         
-        // 应用边距
-        if (clampedMargin > 0) {
-          const latRad = (currentLat * Math.PI) / 180;
-          const cosLat = Math.cos(latRad);
-          const metersPerDegLng =
-            Math.max(Math.abs(cosLat), 1e-6) * 111320; // 避免除以0
-          const marginLonDeg = clampedMargin / metersPerDegLng;
-          const first = sortedIntersections[0];
-          const last = sortedIntersections[sortedIntersections.length - 1];
-          first.point = [first.point[0] - marginLonDeg, first.point[1]];
-          last.point = [last.point[0] + marginLonDeg, last.point[1]];
-        }
-        
-        // 使用递归方法将当前线的所有交点对分组到 groups
-        this.processIntersectionPairs(sortedIntersections, groups);
+        // 使用递归方法将当前线的所有交点对分组到 groups，并在此阶段应用边距
+        this.processIntersectionPairs(
+          sortedIntersections,
+          groups,
+          currentLat,
+          clampedMargin,
+        );
       }
       currentLat += spacingDegrees;
     }
@@ -443,12 +435,15 @@ export class FlightPathService {
   /**
    * 递归处理当前线的所有交点对，动态分组到 groups 数组
    * groups[i] 存储所有平行线的第 i 对交点（即第 2i+1, 2i+2 个交点）
+   * 实现 zigzag 逻辑：偶数索引（0,2,4...）顺序插入，奇数索引（1,3,5...）逆序插入
    * @param intersections - 当前线的所有交点（已排序）
    * @param groups - 分组数组，groups[i] 存储所有线的第 i 对交点
    */
   private processIntersectionPairs(
     intersections: Intersection[],
     groups: Intersection[][],
+    currentLat: number,
+    margin: number,
   ): void {
     // 递归处理第 j 对交点
     function processPair(j: number): void {
@@ -460,12 +455,43 @@ export class FlightPathService {
         groups.push([]);
       }
 
-      // 把这一对的两个点加入 groups[j]
+      // 获取当前对的两个点
       const point1 = intersections[j * 2];
       const point2 = intersections[j * 2 + 1];
+      
       if (point1 && point2) {
-        groups[j].push(point1);
-        groups[j].push(point2);
+        // 计算当前纬度对应的经度缩放，用于边距换算
+        let adjustedPoint1 = point1;
+        let adjustedPoint2 = point2;
+
+        if (margin > 0) {
+          const latRad = (currentLat * Math.PI) / 180;
+          const cosLat = Math.cos(latRad);
+          const metersPerDegLng =
+            Math.max(Math.abs(cosLat), 1e-6) * 111320; // 避免除以0
+          const marginLonDeg = margin / metersPerDegLng;
+
+          adjustedPoint1 = {
+            point: [point1.point[0] - marginLonDeg, point1.point[1]],
+            segmentIndex: point1.segmentIndex,
+          };
+          adjustedPoint2 = {
+            point: [point2.point[0] + marginLonDeg, point2.point[1]],
+            segmentIndex: point2.segmentIndex,
+          };
+        }
+
+        // 根据 group 索引的奇偶性决定插入方式（zigzag）
+        if (j % 2 === 0) {
+          // 偶数索引（0, 2, 4...）：顺序插入（push），从下到上
+          groups[j].push(adjustedPoint1);
+          groups[j].push(adjustedPoint2);
+        } else {
+          // 奇数索引（1, 3, 5...）：逆序插入（unshift），从上到下
+          // 注意：先插入右侧点再插入左侧点
+          groups[j].unshift(adjustedPoint2);
+          groups[j].unshift(adjustedPoint1);
+        }
       }
 
       // 递归处理下一对

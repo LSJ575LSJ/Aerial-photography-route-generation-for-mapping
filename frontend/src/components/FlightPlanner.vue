@@ -437,7 +437,7 @@ function handleShowPathChange(value: boolean) {
 }
 
 function handleShowWaypointsChange(value: boolean) {
-  toggleWaypoints({ target: { checked: value } } as any)
+  toggleWaypointsByValue(value)
 }
 
 async function updateFlightPath() {
@@ -482,9 +482,7 @@ async function updateFlightPath() {
     }
 
     if (showWaypoints.value) {
-      const fakeEvent = new Event('change') as any
-      fakeEvent.target = { checked: true } as HTMLInputElement
-      toggleWaypoints(fakeEvent)
+      toggleWaypointsByValue(true)
     }
   } catch (error: any) {
     // 详细的错误日志
@@ -528,9 +526,13 @@ async function updateFlightPath() {
 
 function toggleWaypoints(e: Event) {
   const target = e.target as HTMLInputElement
+  toggleWaypointsByValue(target.checked)
+}
+
+function toggleWaypointsByValue(show: boolean) {
   removeFlightOverlaysByType('waypoint')
 
-  if (target.checked && flightData.value.waypoints.length > 0) {
+  if (show && flightData.value.waypoints.length > 0) {
     flightData.value.waypoints.forEach((point, index) => {
       const waypointMarker = new (window as any).AMap.Marker({
         position: point,
