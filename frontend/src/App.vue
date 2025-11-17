@@ -1,9 +1,9 @@
 <!-- src/App.vue -->
 <template>
   <div class="app-container">
-    <FlightPlanner :cameraWidth="cameraWidth" />
+    <FlightPlanner :cameraWidth="cameraWidth" :cameraLength="cameraLength" />
     <div class="camera-card-container">
-      <CameraCard @width-change="handleWidthChange" />
+      <CameraCard @width-change="handleWidthChange" @length-change="handleLengthChange" />
     </div>
   </div>
 </template>
@@ -14,9 +14,14 @@ import FlightPlanner from '@/components/FlightPlanner.vue'
 import CameraCard from '@/components/CameraCard.vue'
 
 const cameraWidth = ref<number | null>(null)
+const cameraLength = ref<number | null>(null)
 
 function handleWidthChange(width: number | null) {
   cameraWidth.value = width
+}
+
+function handleLengthChange(length: number | null) {
+  cameraLength.value = length
 }
 </script>
 

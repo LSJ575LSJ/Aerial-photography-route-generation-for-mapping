@@ -39,6 +39,8 @@ export interface ScanLine {
 export interface FlightPathResult {
   path: Point[];
   waypoints: Point[];
+  capturePoints?: Point[];
+  captureInterval?: number | null;
 }
 
 /**
@@ -51,6 +53,7 @@ export interface GeneratePathRequest {
   endPoint?: number[];   // [lng, lat] | null
   angle?: number;        // 扫描角度（度），0-180°，固定使用水平扫描后旋转
   margin?: number;       // 边距（米）
+  captureInterval?: number | null; // 拍照间隔（米），由前端计算
 }
 
 /**
@@ -59,5 +62,7 @@ export interface GeneratePathRequest {
 export interface GeneratePathResponse {
   path: number[][];     // [[lng, lat], [lng, lat], ...]
   waypoints: number[][];
+  capturePoints?: number[][];
+  captureInterval?: number | null;
 }
 

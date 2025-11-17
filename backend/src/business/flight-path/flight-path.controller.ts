@@ -22,6 +22,7 @@ export class FlightPathController {
       endPoint: body.endPoint,
       angle: body.angle,
       margin: body.margin,
+      captureInterval: body.captureInterval,
     }, null, 2));
 
     try {
@@ -52,6 +53,7 @@ export class FlightPathController {
         : null;
       const angle = body.angle ?? 0;
       const margin = body.margin ?? 0;
+      const captureInterval = body.captureInterval ?? null;
 
       this.logger.log('开始生成航线...');
       const startTime = Date.now();
@@ -64,18 +66,22 @@ export class FlightPathController {
         endPoint,
         angle,
         margin,
+        captureInterval,
       );
 
       const duration = Date.now() - startTime;
       this.logger.log(`航线生成成功，耗时: ${duration}ms`);
       this.logger.log(`生成路径点数: ${result.path.length}`);
       this.logger.log(`生成航点数量: ${result.waypoints.length}`);
+      this.logger.log(`生成拍照点数量: ${result.capturePoints?.length ?? 0}`);
       this.logger.log('================================');
 
       // 转换结果到响应格式
       return {
         path: result.path,
         waypoints: result.waypoints,
+        capturePoints: result.capturePoints ?? [],
+        captureInterval: result.captureInterval ?? captureInterval,
       };
     } catch (error: any) {
       this.logger.error('========== 生成航线失败 ==========');

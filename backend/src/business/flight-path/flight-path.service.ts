@@ -246,6 +246,7 @@ export class FlightPathService {
     endPoint: Point | null = null,
     angle = 0,
     margin = 0,
+    captureInterval: number | null = null,
   ): FlightPathResult {
     this.logger.debug(`开始生成航线 - 多边形点数: ${polygon.length}, 间距: ${spacing}m, 角度: ${angle}°, 边距: ${margin}m`);
     
@@ -283,6 +284,7 @@ export class FlightPathService {
         rotatedStart,
         rotatedEnd,
         margin,
+        captureInterval ?? 0,
       );
 
       this.logger.debug(`对齐坐标系中生成的路径点数: ${alignedResult.path.length}, 航点数: ${alignedResult.waypoints.length}`);
@@ -293,12 +295,17 @@ export class FlightPathService {
       const waypoints = alignedResult.waypoints.map((point) =>
         this.rotatePoint(point, rotationCenter, angle),
       );
+      const capturePoints = (alignedResult.capturePoints ?? []).map((point) =>
+        this.rotatePoint(point, rotationCenter, angle),
+      );
 
-      this.logger.debug(`最终路径点数: ${path.length}, 最终航点数: ${waypoints.length}`);
+      this.logger.debug(`最终路径点数: ${path.length}, 最终航点数: ${waypoints.length}, 拍照点数: ${capturePoints.length}`);
 
       return {
         path,
         waypoints,
+        capturePoints,
+        captureInterval,
       };
     } catch (error: any) {
       this.logger.error(`生成航线时发生错误: ${error.message}`);
@@ -322,6 +329,7 @@ export class FlightPathService {
     startPoint: Point,
     endPoint: Point | null,
     margin = 0,
+    captureInterval = 0,
   ): FlightPathResult {
     if (polygon.length === 0) {
       this.logger.debug('多边形为空，生成直线路径');
@@ -337,6 +345,8 @@ export class FlightPathService {
       return {
         path,
         waypoints,
+        capturePoints: [],
+        captureInterval,
       };
     }
 
@@ -345,6 +355,7 @@ export class FlightPathService {
     
     // groups[i] 存储所有平行线的第 i 对交点（即第 2i+1, 2i+2 个交点）
     const groups: Intersection[][] = [];
+    const captureSegments: [Point, Point][] = [];
     const spacingDegrees = spacing / 111000; // 转换米到度数（粗略）
     const clampedMargin = Math.min(Math.max(margin, 0), 5000);
     
@@ -374,6 +385,7 @@ export class FlightPathService {
           groups,
           currentLat,
           clampedMargin,
+          captureSegments,
         );
       }
       currentLat += spacingDegrees;
@@ -389,6 +401,7 @@ export class FlightPathService {
     this.logger.debug('开始构建航线路径...');
     const flightPath: Point[] = [startPoint];
     const waypoints: Point[] = [];
+    const capturePoints: Point[] = [];
     let isForward = true;
 
     // 按 groups 顺序处理：groups[0] → groups[1] → groups[2] ...
@@ -420,6 +433,38 @@ export class FlightPathService {
       }
     }
 
+    // 按每条扫描线段生成拍照点（仅在扫描段上，不在转场段上）
+    if (captureInterval > 0) {
+      const clampedInterval = Math.max(captureInterval, 0.01); // 避免 0 或负数
+      for (const [start, end] of captureSegments) {
+        const segmentLength = this.calculateDistance(start, end);
+        if (!Number.isFinite(segmentLength) || segmentLength <= 0) {
+          continue;
+        }
+
+        // 起点必拍
+        capturePoints.push(start);
+
+        // 沿线按间隔插点
+        let distFromStart = clampedInterval;
+        while (distFromStart < segmentLength) {
+          const ratio = distFromStart / segmentLength;
+          const lng =
+            start[0] + (end[0] - start[0]) * ratio;
+          const lat =
+            start[1] + (end[1] - start[1]) * ratio;
+          capturePoints.push([lng, lat]);
+          distFromStart += clampedInterval;
+        }
+
+        // 末尾必拍：将终点作为最后一个拍照点（避免重复，可做去重）
+        const last = capturePoints[capturePoints.length - 1];
+        if (!last || last[0] !== end[0] || last[1] !== end[1]) {
+          capturePoints.push(end);
+        }
+      }
+    }
+
     // 添加终点
     const finalPoint = endPoint || startPoint;
     flightPath.push(finalPoint);
@@ -429,6 +474,8 @@ export class FlightPathService {
     return {
       path: flightPath,
       waypoints: waypoints,
+      capturePoints,
+      captureInterval,
     };
   }
 
@@ -444,6 +491,7 @@ export class FlightPathService {
     groups: Intersection[][],
     currentLat: number,
     margin: number,
+    captureSegments: [Point, Point][],
   ): void {
     // 递归处理第 j 对交点
     function processPair(j: number): void {
@@ -480,6 +528,9 @@ export class FlightPathService {
             segmentIndex: point2.segmentIndex,
           };
         }
+
+        // 记录当前扫描线段（用于后续生成拍照点）
+        captureSegments.push([adjustedPoint1.point, adjustedPoint2.point]);
 
         // 根据 group 索引的奇偶性决定插入方式（zigzag）
         if (j % 2 === 0) {

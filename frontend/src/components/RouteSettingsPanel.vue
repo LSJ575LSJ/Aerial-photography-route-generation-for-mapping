@@ -99,6 +99,34 @@
             </div>
           </el-form-item>
 
+          <!-- 航向重叠率 -->
+          <el-form-item label="航向重叠率 (%)">
+            <el-slider
+              :model-value="headingOverlapLocal"
+              @update:model-value="handleHeadingOverlapChange"
+              :min="0"
+              :max="100"
+              :step="1"
+              show-input
+            />
+          </el-form-item>
+
+          <!-- 单张照片航向覆盖长度 -->
+          <el-form-item label="单张照片航向覆盖长度 (m)">
+            <div class="spacing-display">
+              <span v-if="props.cameraLength !== null" class="spacing-value">{{ props.cameraLength.toFixed(2) }}</span>
+              <span v-else class="spacing-hint">请在右侧相机参数中计算</span>
+            </div>
+          </el-form-item>
+
+          <!-- 拍照间隔 -->
+          <el-form-item label="拍照间隔 (m)">
+            <div class="spacing-display">
+              <span v-if="calculatedPhotoInterval !== null" class="spacing-value">{{ calculatedPhotoInterval.toFixed(2) }}</span>
+              <span v-else class="spacing-hint">请设置航向画幅长度和航向重叠率</span>
+            </div>
+          </el-form-item>
+
           <!-- 角度 -->
           <el-form-item label="角度 (°)">
             <el-slider
@@ -128,12 +156,15 @@
       <!-- 结果显示 -->
       <el-collapse-item title="结果显示" name="results">
         <el-form label-position="top" size="small">
-          <el-form-item label="显示选项">
+          <el-form-item label="显示选项" class="display-options">
             <el-checkbox :model-value="showPath" @update:model-value="handleShowPathChange">
               显示航线
             </el-checkbox>
-            <el-checkbox :model-value="showWaypoints" @update:model-value="handleShowWaypointsChange" style="margin-left: 16px;">
+            <el-checkbox :model-value="showWaypoints" @update:model-value="handleShowWaypointsChange">
               显示航点
+            </el-checkbox>
+            <el-checkbox :model-value="showCapturePointsLocal" @update:model-value="handleShowCapturePointsChange">
+              显示拍照点
             </el-checkbox>
           </el-form-item>
 
@@ -189,6 +220,10 @@ interface Props {
   isDrawing: boolean
   drawingStatus: string
   cameraWidth: number | null
+  cameraLength: number | null
+  headingOverlap: number
+  showCapturePoints: boolean
+  photoInterval: number | null
 }
 
 const props = defineProps<Props>()
@@ -201,6 +236,8 @@ const emit = defineEmits<{
   'update:showPath': [value: boolean]
   'update:showWaypoints': [value: boolean]
   'update:speed': [value: number]
+  'update:headingOverlap': [value: number]
+  'update:showCapturePoints': [value: boolean]
   'toggle-pick-start': []
   'toggle-pick-end': []
   'apply-geojson': []
@@ -212,10 +249,14 @@ const emit = defineEmits<{
   'margin-change': [value: number]
   'show-path-change': [value: boolean]
   'show-waypoints-change': [value: boolean]
+  'photo-interval-change': [value: number | null]
+  'show-capture-points-change': [value: boolean]
 }>()
 
 // 旁向重叠率（0-100）
 const overlapRate = ref(70) // 默认70%
+const headingOverlapLocal = ref(props.headingOverlap ?? 70)
+const showCapturePointsLocal = ref(props.showCapturePoints)
 
 // 计算间距：间距 = 2 * 宽度 / (重叠率 + 1)
 // 重叠率是百分比，需要转换为小数：重叠率 / 100
@@ -228,12 +269,32 @@ const calculatedSpacing = computed(() => {
   return spacing
 })
 
+const calculatedPhotoInterval = computed(() => {
+  if (props.cameraLength === null || props.cameraLength <= 0) {
+    return null
+  }
+  const headingDecimal = headingOverlapLocal.value / 100
+  return props.cameraLength * (1 - headingDecimal)
+})
+
 // 监听计算出的间距变化，自动更新到父组件
 watch(calculatedSpacing, (newSpacing) => {
   if (newSpacing !== null && newSpacing > 0) {
     emit('update:spacing', newSpacing)
     emit('spacing-change', newSpacing)
   }
+})
+
+watch(() => props.headingOverlap, (val) => {
+  headingOverlapLocal.value = val ?? 0
+})
+
+watch(() => props.showCapturePoints, (val) => {
+  showCapturePointsLocal.value = val
+})
+
+watch(calculatedPhotoInterval, (val) => {
+  emit('photo-interval-change', val ?? null)
 })
 
 // 监听相机宽度变化，重新计算间距
@@ -289,6 +350,17 @@ function handleAngleChange(value: number) {
 function handleMarginChange(value: number) {
   emit('update:margin', value)
   emit('margin-change', value)
+}
+
+function handleHeadingOverlapChange(value: number) {
+  headingOverlapLocal.value = value
+  emit('update:headingOverlap', value)
+}
+
+function handleShowCapturePointsChange(value: boolean) {
+  showCapturePointsLocal.value = value
+  emit('update:showCapturePoints', value)
+  emit('show-capture-points-change', value)
 }
 
 function handleShowPathChange(value: boolean) {
@@ -379,6 +451,13 @@ function handleToggleDraw() {
 .spacing-hint {
   font-size: 12px;
   color: #999;
+}
+
+:deep(.display-options .el-form-item__content) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 /* 修复滑块手柄被覆盖的问题 */

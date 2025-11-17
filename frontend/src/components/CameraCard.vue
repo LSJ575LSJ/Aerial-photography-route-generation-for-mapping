@@ -23,6 +23,16 @@
             class="full-width"
           />
         </el-form-item>
+        <el-form-item label="相机画幅长度 (mm)">
+          <el-input-number
+            v-model="form.sensorLength"
+            :min="0"
+            :step="1"
+            controls-position="right"
+            placeholder="请输入画幅长度"
+            class="full-width"
+          />
+        </el-form-item>
         <el-form-item label="焦距 (mm)">
           <el-input-number
             v-model="form.focalLength"
@@ -35,7 +45,7 @@
         </el-form-item>
         <el-form-item>
           <el-button type="primary" class="full-width" @click="handleCalculate">
-            计算可拍摄宽度
+            计算可拍摄信息
           </el-button>
         </el-form-item>
       </el-form>
@@ -46,6 +56,12 @@
         <span>可拍摄宽度：</span>
         <span class="value">
           {{ formattedWidth }}
+        </span>
+      </div>
+      <div class="result">
+        <span>可拍摄长度：</span>
+        <span class="value">
+          {{ formattedLength }}
         </span>
       </div>
     </el-card>
@@ -59,25 +75,29 @@ import { ElMessage } from 'element-plus'
 interface CameraForm {
   altitude: number
   sensorWidth: number
+  sensorLength: number
   focalLength: number
 }
 
 const form = reactive<CameraForm>({
-  altitude: 120, // 默认飞行高度 (米)
+  altitude: 800, // 默认飞行高度 (米)
   sensorWidth: 36, // 默认画幅 (mm) - 全画幅
+  sensorLength: 24, // 默认画幅长度 (mm)
   focalLength: 35 // 默认焦距 (mm)
 })
 
 const groundWidth = ref<number | null>(null)
+const groundLength = ref<number | null>(null)
 
 const emit = defineEmits<{
   'width-change': [width: number | null]
+  'length-change': [length: number | null]
 }>()
 
 function handleCalculate() {
-  const { altitude, sensorWidth, focalLength } = form
+  const { altitude, sensorWidth, sensorLength, focalLength } = form
 
-  if (altitude <= 0 || sensorWidth <= 0 || focalLength <= 0) {
+  if (altitude <= 0 || sensorWidth <= 0 || sensorLength <= 0 || focalLength <= 0) {
     ElMessage.warning('请确保高度、画幅和焦距都大于 0')
     return
   }
@@ -86,15 +106,23 @@ function handleCalculate() {
   // altitude 单位为米，需要换算成毫米再计算
   const altitudeMm = altitude * 1000
   const widthMm = altitudeMm * (sensorWidth / focalLength)
+  const lengthMm = altitudeMm * (sensorLength / focalLength)
   const widthMeters = widthMm / 1000
+  const lengthMeters = lengthMm / 1000
 
   groundWidth.value = widthMeters
+  groundLength.value = lengthMeters
   emit('width-change', widthMeters)
+  emit('length-change', lengthMeters)
 }
 
 // 监听宽度变化，自动通知父组件
 watch(groundWidth, (newWidth) => {
   emit('width-change', newWidth)
+})
+
+watch(groundLength, (newLength) => {
+  emit('length-change', newLength)
 })
 
 const formattedWidth = computed(() => {
@@ -105,6 +133,16 @@ const formattedWidth = computed(() => {
     return '计算错误'
   }
   return `${groundWidth.value.toFixed(2)} m`
+})
+
+const formattedLength = computed(() => {
+  if (groundLength.value === null) {
+    return '未计算'
+  }
+  if (!Number.isFinite(groundLength.value)) {
+    return '计算错误'
+  }
+  return `${groundLength.value.toFixed(2)} m`
 })
 
 // 初始化时计算一次

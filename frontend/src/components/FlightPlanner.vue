@@ -26,6 +26,12 @@
         :isDrawing="isDrawing"
         :drawingStatus="drawingStatus"
         :cameraWidth="props.cameraWidth"
+        :cameraLength="props.cameraLength"
+        :headingOverlap="headingOverlap"
+        @update:headingOverlap="(val) => (headingOverlap = val)"
+        :showCapturePoints="showCapturePoints"
+        @update:showCapturePoints="(val) => (showCapturePoints = val)"
+        :photoInterval="photoInterval"
         @toggle-pick-start="togglePickStart"
         @toggle-pick-end="togglePickEnd"
         @apply-geojson="applyGeojson"
@@ -35,6 +41,8 @@
         @margin-change="updateFlightPath"
         @show-path-change="handleShowPathChange"
         @show-waypoints-change="handleShowWaypointsChange"
+        @photo-interval-change="handlePhotoIntervalChange"
+        @show-capture-points-change="handleShowCapturePointsChange"
         @simulate="simulateFlight"
         @export="exportGeojson"
       />
@@ -74,6 +82,12 @@
           <span>航线总长：</span>
           <span class="info-value"><span class="totalLength">{{ totalLength.toLocaleString() }}</span>米</span>
         </div>
+        <div class="info-item">
+          <span>拍照间隔：</span>
+          <span class="info-value">
+            <span class="photoInterval">{{ photoInterval !== null ? photoInterval.toFixed(2) : '-' }}</span>米
+          </span>
+        </div>
       </div>
     </div>
 
@@ -93,10 +107,12 @@ import RouteSettingsPanel from './RouteSettingsPanel.vue'
 
 interface Props {
   cameraWidth?: number | null
+  cameraLength?: number | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  cameraWidth: null
+  cameraWidth: null,
+  cameraLength: null
 })
 
 // ========== 状态 ==========
@@ -111,11 +127,15 @@ const currentAngle = ref(0)
 const currentMargin = ref(0)
 const showPath = ref(true)
 const showWaypoints = ref(false)
+const showCapturePoints = ref(false)
 const currentSpeed = ref(10)
 const isSimulating = ref(false)
 const mapType = ref<'normal' | 'satellite'>('normal')
 const isDrawing = ref(false)
 const drawingStatus = ref('')
+const headingOverlap = ref(70)
+const photoInterval = ref<number | null>(null)
+let captureUpdateTimer: number | null = null
 
 // 地图相关
 let map: any = null
@@ -127,7 +147,7 @@ let droneMarker: any = null
 let animationInterval: number | null = null
 let currentPathIndex = 0
 let satelliteLayer: any = null
-type FlightOverlayType = 'line' | 'waypoint' | 'drone'
+type FlightOverlayType = 'line' | 'waypoint' | 'drone' | 'capture'
 const flightOverlays: any[] = []
 
 // 绘制相关
@@ -135,19 +155,31 @@ let drawingPoints: [number, number][] = []
 let drawingPolyline: any = null
 let drawingMarkers: any[] = []
 
-// 航线数据
+// 航线数据 - 默认多边形范围（来自用户提供的 GeoJSON）
 const path = ref<[number, number][]>([
-  [116.362209, 39.887487],
-  [116.422897, 39.878002],
-  [116.392105, 39.90651],
-  [116.372105, 39.91751],
-  [116.362105, 39.93751],
-  [116.362209, 39.887487]
+  [116.254331, 39.927728],
+  [116.254443, 39.8742],
+  [116.280763, 39.873426],
+  [116.278523, 39.927813],
+  [116.308202, 39.927298],
+  [116.31033, 39.873942],
+  [116.33777, 39.873856],
+  [116.33609, 39.927899],
+  [116.33105, 39.927985],
+  [116.332842, 39.87695],
+  [116.314138, 39.877036],
+  [116.312234, 39.929617],
+  [116.274317, 39.931335],
+  [116.276557, 39.877724],
+  [116.258077, 39.878755],
+  [116.257517, 39.928071],
+  [116.254331, 39.927728]
 ])
 
 const flightData = ref({
   path: [] as [number, number][],
-  waypoints: [] as [number, number][]
+  waypoints: [] as [number, number][],
+  capturePoints: [] as [number, number][]
 })
 
 const totalLength = ref(0)
@@ -440,6 +472,39 @@ function handleShowWaypointsChange(value: boolean) {
   toggleWaypointsByValue(value)
 }
 
+function handleShowCapturePointsChange(value: boolean) {
+  showCapturePoints.value = value
+  if (
+    value &&
+    photoInterval.value !== null &&
+    photoInterval.value > 0 &&
+    (!flightData.value.capturePoints ||
+      flightData.value.capturePoints.length === 0)
+  ) {
+    updateFlightPath()
+    return
+  }
+  toggleCapturePoints(value)
+}
+
+function handlePhotoIntervalChange(value: number | null) {
+  photoInterval.value = value
+}
+
+watch(photoInterval, (val) => {
+  if (captureUpdateTimer) {
+    clearTimeout(captureUpdateTimer)
+    captureUpdateTimer = null
+  }
+  if (val === null || val <= 0) {
+    return
+  }
+  captureUpdateTimer = window.setTimeout(() => {
+    captureUpdateTimer = null
+    updateFlightPath()
+  }, 300)
+})
+
 async function updateFlightPath() {
   if (!map) return
 
@@ -456,13 +521,15 @@ async function updateFlightPath() {
       startPoint: startPoint.value,
       endPoint: endPoint.value || undefined,
       angle: currentAngle.value,
-      margin: currentMargin.value
+      margin: currentMargin.value,
+      captureInterval: photoInterval.value || null
     })
 
     // 转换响应数据格式
     const result = {
       path: response.data.path as [number, number][],
-      waypoints: response.data.waypoints as [number, number][]
+      waypoints: response.data.waypoints as [number, number][],
+      capturePoints: (response.data.capturePoints || []) as [number, number][]
     }
 
     flightData.value = result
@@ -483,6 +550,10 @@ async function updateFlightPath() {
 
     if (showWaypoints.value) {
       toggleWaypointsByValue(true)
+    }
+
+    if (showCapturePoints.value) {
+      toggleCapturePoints(true)
     }
   } catch (error: any) {
     // 详细的错误日志
@@ -542,6 +613,24 @@ function toggleWaypointsByValue(show: boolean) {
       })
       waypointMarker.setMap(map)
       registerFlightOverlay(waypointMarker, 'waypoint')
+    })
+  }
+}
+
+function toggleCapturePoints(show: boolean) {
+  removeFlightOverlaysByType('capture')
+
+  if (show && flightData.value.capturePoints && flightData.value.capturePoints.length > 0) {
+    flightData.value.capturePoints.forEach((point) => {
+      const captureMarker = new (window as any).AMap.Marker({
+        position: point,
+        offset: new (window as any).AMap.Pixel(-6, -6),
+        content:
+          '<div style="width: 8px; height: 8px; border-radius: 50%; background-color: #ff6600; border: 2px solid #ffffff; box-shadow: 0 0 4px rgba(0,0,0,0.4);"></div>',
+        zIndex: 53
+      })
+      captureMarker.setMap(map)
+      registerFlightOverlay(captureMarker, 'capture')
     })
   }
 }
