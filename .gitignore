@@ -40,7 +40,10 @@ backend/node_modules/
 frontend/dist/
 frontend/node_modules/
 
-# 其他
+# 其他目录（不上传）
+something/
+
+# 其他文件
 *.geojson
 concave-polygon-test.geojson
 

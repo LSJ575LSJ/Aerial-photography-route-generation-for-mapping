@@ -80,7 +80,7 @@ interface CameraForm {
 }
 
 const form = reactive<CameraForm>({
-  altitude: 800, // 默认飞行高度 (米)
+  altitude: 200, // 默认飞行高度 (米)
   sensorWidth: 36, // 默认画幅 (mm) - 全画幅
   sensorLength: 24, // 默认画幅长度 (mm)
   focalLength: 35 // 默认焦距 (mm)
