@@ -1,5 +1,5 @@
 ### 项目简介
-无人机航拍航线规划系统，支持自定义区域扫描、航线生成、拍照点计算等功能。特别声明，本项目是在https://github.com/zealmap/fly-design?tab=readme-ov-file的基础上完善的，感谢原作者！侵权联系我可删除本项目。
+无人机航拍航线规划系统，支持自定义区域扫描、航线生成、拍照点计算等功能。特别声明，本项目是在https://github.com/zealmap/fly-design?tab=readme-ov-file 的基础上完善的，感谢原作者！侵权联系我可删除本项目。
 
 ---
 
