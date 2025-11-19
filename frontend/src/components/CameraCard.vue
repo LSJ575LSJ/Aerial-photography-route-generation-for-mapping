@@ -92,6 +92,7 @@ const groundLength = ref<number | null>(null)
 const emit = defineEmits<{
   'width-change': [width: number | null]
   'length-change': [length: number | null]
+  'altitude-change': [altitude: number]
 }>()
 
 function handleCalculate() {
@@ -123,6 +124,11 @@ watch(groundWidth, (newWidth) => {
 
 watch(groundLength, (newLength) => {
   emit('length-change', newLength)
+})
+
+// 监听高度变化，自动通知父组件
+watch(() => form.altitude, (newAltitude) => {
+  emit('altitude-change', newAltitude)
 })
 
 const formattedWidth = computed(() => {

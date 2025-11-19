@@ -6,6 +6,7 @@ import {
   Intersection,
   ScanLine,
   FlightPathResult,
+  FlightPathGenerationOptions,
 } from './flight-path.interface';
 
 @Injectable()
@@ -230,6 +231,36 @@ export class FlightPathService {
   }
 
   /**
+   * 对点集应用侧向偏移
+   * @param points 点集
+   * @param offsetMeters 偏移距离（米）
+   * @param angleDeg 偏移方向角度（度），0度为正东，90度为正北
+   * @returns 偏移后的点集
+   */
+  private applyLateralOffset(points: Point[], offsetMeters: number, angleDeg: number): Point[] {
+    if (offsetMeters <= 0 || points.length === 0) return points;
+    
+    // 将偏移距离转换为经纬度偏移量（粗略估算）
+    // 1度经度 ≈ 111320 * cos(纬度) 米
+    // 1度纬度 ≈ 111320 米
+    // 这里使用平均纬度（取第一个点的纬度）来估算
+    const avgLat = points[0]?.[1] ?? 39.9; // 默认北京纬度
+    const latRad = (avgLat * Math.PI) / 180;
+    const metersPerDegLng = 111320 * Math.cos(latRad);
+    const metersPerDegLat = 111320;
+    
+    // 计算偏移向量（经纬度单位）
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const offsetLng = (offsetMeters / metersPerDegLng) * Math.cos(angleRad);
+    const offsetLat = (offsetMeters / metersPerDegLat) * Math.sin(angleRad);
+    
+    return points.map((point) => [
+      point[0] + offsetLng,
+      point[1] + offsetLat,
+    ]);
+  }
+
+  /**
    * 生成无人机航线路径，支持自定义扫描角度
    * @param polygon - 多边形区域的顶点坐标数组，每个顶点为[经度, 纬度]
    * @param spacing - 航线间距，单位：米
@@ -247,8 +278,25 @@ export class FlightPathService {
     angle = 0,
     margin = 0,
     captureInterval: number | null = null,
+    options: FlightPathGenerationOptions = {},
   ): FlightPathResult {
-    this.logger.debug(`开始生成航线 - 多边形点数: ${polygon.length}, 间距: ${spacing}m, 角度: ${angle}°, 边距: ${margin}m`);
+    const baseMargin = margin ?? 0;
+    const lateralOffsetRaw = options.lateralOffset ?? 0;
+    const lateralOffset = Number.isFinite(lateralOffsetRaw) ? lateralOffsetRaw : 0;
+    const lateralOffsetDirectionRaw = options.lateralOffsetDirection ?? null;
+    const lateralOffsetDirection = Number.isFinite(lateralOffsetDirectionRaw ?? NaN)
+      ? (lateralOffsetDirectionRaw as number)
+      : null;
+    const lateralOffsetText = Number.isFinite(lateralOffset)
+      ? lateralOffset.toFixed(3)
+      : 'NaN';
+
+    this.logger.debug(
+      `开始生成航线 - 多边形点数: ${polygon.length}, 间距: ${spacing}m, 角度: ${angle}°, 边距: ${baseMargin}m`,
+    );
+    this.logger.debug(
+      `Mission: ${options.missionType ?? 'mapping'}, gimbalPitch: ${options.gimbalPitchDeg ?? 0}°, lateralOffset: ${lateralOffsetText}m`,
+    );
     
     try {
       const normalizedPolygon = this.normalizePolygon(polygon);
@@ -278,34 +326,68 @@ export class FlightPathService {
         this.logger.debug(`旋转后的降落点: [${rotatedEnd[0].toFixed(6)}, ${rotatedEnd[1].toFixed(6)}]`);
       }
 
+      // 注意：对于倾斜摄影，lateralOffset 不应该加到 margin 上
+      // margin 用于边距，lateralOffset 用于后续对点的偏移
+      const marginForScan = baseMargin; // 扫描时只用原始边距
       const alignedResult = this.generateAlignedFlightPath(
         rotatedPolygon,
         spacing,
         rotatedStart,
         rotatedEnd,
-        margin,
+        marginForScan,
         captureInterval ?? 0,
       );
 
       this.logger.debug(`对齐坐标系中生成的路径点数: ${alignedResult.path.length}, 航点数: ${alignedResult.waypoints.length}`);
 
-      const path = alignedResult.path.map((point) =>
+      // 先旋转回原始坐标系
+      let path = alignedResult.path.map((point) =>
         this.rotatePoint(point, rotationCenter, angle),
       );
-      const waypoints = alignedResult.waypoints.map((point) =>
+      let waypoints = alignedResult.waypoints.map((point) =>
         this.rotatePoint(point, rotationCenter, angle),
       );
-      const capturePoints = (alignedResult.capturePoints ?? []).map((point) =>
+      let capturePoints = (alignedResult.capturePoints ?? []).map((point) =>
         this.rotatePoint(point, rotationCenter, angle),
       );
 
+      // 如果有偏移量且不是建图模式，对所有点进行偏移
+      if (lateralOffset > 0 && options.missionType === 'oblique') {
+        const offsetAngle = lateralOffsetDirection ?? angle + 90;
+        const normalizedOffsetAngle = ((offsetAngle % 360) + 360) % 360;
+
+        const originalLastPoint: Point | null =
+          path.length > 0 ? [path[path.length - 1][0], path[path.length - 1][1]] : null;
+
+        path = this.applyLateralOffset(path, lateralOffset, normalizedOffsetAngle);
+        waypoints = this.applyLateralOffset(waypoints, lateralOffset, normalizedOffsetAngle);
+        capturePoints = this.applyLateralOffset(capturePoints, lateralOffset, normalizedOffsetAngle);
+        this.logger.debug(
+          `应用侧向偏移: ${lateralOffset.toFixed(3)}m, 偏移角度: ${normalizedOffsetAngle}°`,
+        );
+
+        // 保持起飞/降落点不偏移
+        if (path.length > 0) {
+          path[0] = [startPoint[0], startPoint[1]];
+          const lastIndex = path.length - 1;
+          if (endPoint && lastIndex >= 0) {
+            path[lastIndex] = [endPoint[0], endPoint[1]];
+          } else if (originalLastPoint && lastIndex >= 0) {
+            path[lastIndex] = originalLastPoint;
+          }
+        }
+      }
+
       this.logger.debug(`最终路径点数: ${path.length}, 最终航点数: ${waypoints.length}, 拍照点数: ${capturePoints.length}`);
+
+      const line = { path, waypoints, capturePoints };
 
       return {
         path,
         waypoints,
         capturePoints,
         captureInterval,
+        lines: [line],
       };
     } catch (error: any) {
       this.logger.error(`生成航线时发生错误: ${error.message}`);

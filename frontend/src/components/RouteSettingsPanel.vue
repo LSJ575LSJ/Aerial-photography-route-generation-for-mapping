@@ -8,6 +8,12 @@
     <el-collapse v-model="activeCollapse" class="settings-collapse">
       <el-collapse-item title="目标区域设置" name="target">
         <el-form label-position="top" size="small">
+          <el-form-item label="航线类型">
+            <el-radio-group v-model="missionType" size="small">
+              <el-radio-button label="mapping">建图航拍</el-radio-button>
+              <el-radio-button label="oblique">倾斜摄影</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
           <el-form-item label="GeoJSON 数据">
             <el-input
               :model-value="geojsonInput"
@@ -139,6 +145,32 @@
             />
           </el-form-item>
 
+          <!-- 云台水平夹角（仅倾斜摄影） -->
+          <el-form-item
+            v-if="missionType === 'oblique'"
+            label="云台垂直夹角 (°)"
+          >
+            <el-slider
+              :model-value="props.gimbalYaw"
+              @update:model-value="handleGimbalYawChange"
+              :min="0"
+              :max="90"
+              :step="1"
+              show-input
+            />
+          </el-form-item>
+
+          <!-- 偏移距离显示（仅倾斜摄影） -->
+          <el-form-item
+            v-if="missionType === 'oblique'"
+            label="偏移距离 (m)"
+          >
+            <div class="spacing-display">
+              <span v-if="calculatedLateralOffset !== null && calculatedLateralOffset > 0" class="spacing-value">{{ calculatedLateralOffset.toFixed(2) }}</span>
+              <span v-else class="spacing-hint">请设置云台垂直夹角和飞行高度</span>
+            </div>
+          </el-form-item>
+
           <!-- 边距 -->
           <el-form-item label="边距 (m)">
             <el-slider
@@ -205,6 +237,7 @@ import { ref, computed, watch } from 'vue'
 
 interface Props {
   geojsonInput: string
+  missionType?: 'mapping' | 'oblique'
   startPoint: [number, number] | null
   endPoint: [number, number] | null
   isPickingStart: boolean
@@ -221,15 +254,22 @@ interface Props {
   drawingStatus: string
   cameraWidth: number | null
   cameraLength: number | null
+  altitude?: number
   headingOverlap: number
   showCapturePoints: boolean
   photoInterval: number | null
+  gimbalYaw?: number
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  missionType: 'mapping',
+  gimbalYaw: 0,
+  altitude: 200,
+})
 
 const emit = defineEmits<{
   'update:geojsonInput': [value: string]
+  'update:missionType': [value: 'mapping' | 'oblique']
   'update:spacing': [value: number]
   'update:angle': [value: number]
   'update:margin': [value: number]
@@ -251,6 +291,8 @@ const emit = defineEmits<{
   'show-waypoints-change': [value: boolean]
   'photo-interval-change': [value: number | null]
   'show-capture-points-change': [value: boolean]
+  'update:gimbalYaw': [value: number]
+  'lateral-offset-change': [value: number]
 }>()
 
 // 旁向重叠率（0-100）
@@ -275,6 +317,15 @@ const calculatedPhotoInterval = computed(() => {
   }
   const headingDecimal = headingOverlapLocal.value / 100
   return props.cameraLength * (1 - headingDecimal)
+})
+
+// 计算偏移距离：偏移距离 = 高度 * tan(云台垂直夹角)
+const calculatedLateralOffset = computed(() => {
+  if (props.missionType !== 'oblique' || !props.altitude || props.altitude <= 0) {
+    return null
+  }
+  const tiltRad = ((props.gimbalYaw ?? 0) * Math.PI) / 180
+  return props.altitude * Math.tan(tiltRad)
 })
 
 // 监听计算出的间距变化，自动更新到父组件
@@ -305,7 +356,30 @@ watch(() => props.cameraWidth, () => {
   }
 })
 
+// 监听计算出的偏移量变化，自动更新到父组件
+watch(calculatedLateralOffset, (newOffset) => {
+  if (newOffset !== null && newOffset >= 0) {
+    emit('lateral-offset-change', newOffset)
+  } else {
+    emit('lateral-offset-change', 0)
+  }
+})
+
 const activeCollapse = ref(['target', 'route', 'results'])
+const missionType = computed({
+  get: () => props.missionType,
+  set: (value: 'mapping' | 'oblique') => {
+    emit('update:missionType', value)
+    // 切换任务类型时重新计算偏移量
+    if (value === 'oblique' && props.altitude && props.altitude > 0) {
+      const tiltRad = ((props.gimbalYaw ?? 0) * Math.PI) / 180
+      const lateralOffset = props.altitude * Math.tan(tiltRad)
+      emit('lateral-offset-change', lateralOffset)
+    } else {
+      emit('lateral-offset-change', 0)
+    }
+  },
+})
 
 const startPointText = computed(() => {
   if (!props.startPoint) return '未设置'
@@ -383,6 +457,18 @@ function handleExport() {
 
 function handleToggleDraw() {
   emit('toggle-draw')
+}
+
+function handleGimbalYawChange(value: number) {
+  emit('update:gimbalYaw', value)
+  // 计算偏移量：偏移距离 = 高度 * tan(云台垂直夹角)
+  if (props.missionType === 'oblique' && props.altitude && props.altitude > 0) {
+    const tiltRad = (value * Math.PI) / 180
+    const lateralOffset = props.altitude * Math.tan(tiltRad)
+    emit('lateral-offset-change', lateralOffset)
+  } else {
+    emit('lateral-offset-change', 0)
+  }
 }
 </script>
 

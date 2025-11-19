@@ -5,6 +5,8 @@
       <RouteSettingsPanel
         :geojsonInput="geojsonInput"
         @update:geojsonInput="(val) => geojsonInput = val"
+        :missionType="missionType"
+        @update:missionType="(val) => (missionType = val)"
         :spacing="currentSpacing"
         @update:spacing="(val) => currentSpacing = val"
         :angle="currentAngle"
@@ -27,11 +29,15 @@
         :drawingStatus="drawingStatus"
         :cameraWidth="props.cameraWidth"
         :cameraLength="props.cameraLength"
+        :altitude="props.altitude"
         :headingOverlap="headingOverlap"
         @update:headingOverlap="(val) => (headingOverlap = val)"
         :showCapturePoints="showCapturePoints"
         @update:showCapturePoints="(val) => (showCapturePoints = val)"
         :photoInterval="photoInterval"
+        :gimbalYaw="gimbalYaw"
+        @update:gimbalYaw="(val) => (gimbalYaw = val)"
+        @lateral-offset-change="(val) => (lateralOffset = val)"
         @toggle-pick-start="togglePickStart"
         @toggle-pick-end="togglePickEnd"
         @apply-geojson="applyGeojson"
@@ -63,6 +69,18 @@
         @click="setMapType('satellite')"
       >
         影像地图
+      </button>
+    </div>
+
+    <!-- 倾斜摄影航线切换按钮组（仅倾斜模式显示） -->
+    <div v-if="missionType === 'oblique' && flightLines.length >= 1" class="line-selector">
+      <button
+        v-for="(line, index) in flightLines"
+        :key="index"
+        :class="['line-button', { active: selectedLineIndex === index }]"
+        @click="selectLine(index)"
+      >
+        {{ index + 1 }}
       </button>
     </div>
 
@@ -108,11 +126,13 @@ import RouteSettingsPanel from './RouteSettingsPanel.vue'
 interface Props {
   cameraWidth?: number | null
   cameraLength?: number | null
+  altitude?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   cameraWidth: null,
-  cameraLength: null
+  cameraLength: null,
+  altitude: 200
 })
 
 // ========== 状态 ==========
@@ -125,6 +145,7 @@ const pickerStatus = ref('')
 const currentSpacing = ref(350)
 const currentAngle = ref(0)
 const currentMargin = ref(0)
+const missionType = ref<'mapping' | 'oblique'>('mapping')
 const showPath = ref(true)
 const showWaypoints = ref(false)
 const showCapturePoints = ref(false)
@@ -134,7 +155,15 @@ const mapType = ref<'normal' | 'satellite'>('normal')
 const isDrawing = ref(false)
 const drawingStatus = ref('')
 const headingOverlap = ref(70)
+const gimbalYaw = ref(60)
+const lateralOffset = ref(0)
 const photoInterval = ref<number | null>(null)
+const selectedLineIndex = ref(0) // 当前选中的航线索引（0-4）
+const flightLines = ref<Array<{
+  path: [number, number][]
+  waypoints: [number, number][]
+  capturePoints: [number, number][]
+}>>([]) // 存储所有航线
 let captureUpdateTimer: number | null = null
 
 // 地图相关
@@ -157,23 +186,11 @@ let drawingMarkers: any[] = []
 
 // 航线数据 - 默认多边形范围（来自用户提供的 GeoJSON）
 const path = ref<[number, number][]>([
-  [116.254331, 39.927728],
-  [116.254443, 39.8742],
-  [116.280763, 39.873426],
-  [116.278523, 39.927813],
-  [116.308202, 39.927298],
-  [116.31033, 39.873942],
-  [116.33777, 39.873856],
-  [116.33609, 39.927899],
-  [116.33105, 39.927985],
-  [116.332842, 39.87695],
-  [116.314138, 39.877036],
-  [116.312234, 39.929617],
-  [116.274317, 39.931335],
-  [116.276557, 39.877724],
-  [116.258077, 39.878755],
-  [116.257517, 39.928071],
-  [116.254331, 39.927728]
+  [116.290276, 39.855927],
+  [116.27192, 39.826199],
+  [116.331307, 39.81364],
+  [116.342875, 39.848703],
+  [116.290276, 39.855927]
 ])
 
 const flightData = ref({
@@ -522,6 +539,9 @@ async function updateFlightPath() {
       endPoint: endPoint.value || undefined,
       angle: currentAngle.value,
       margin: currentMargin.value,
+      missionType: missionType.value,
+      gimbalYaw: missionType.value === 'oblique' ? gimbalYaw.value : undefined,
+      lateralOffset: missionType.value === 'oblique' ? lateralOffset.value : undefined,
       captureInterval: photoInterval.value || null
     })
 
@@ -532,28 +552,61 @@ async function updateFlightPath() {
       capturePoints: (response.data.capturePoints || []) as [number, number][]
     }
 
-    flightData.value = result
-    totalLength.value = Math.round(calculatePathLength(result.path))
-
-    flightLine = new (window as any).AMap.Polyline({
-      path: result.path,
-      strokeColor: '#0000FF',
-      strokeWeight: 5,
-      zIndex: 51,
-      showDir: true,
-      dirColor: '#ff0000'
-    })
-    registerFlightOverlay(flightLine, 'line')
-    if (showPath.value) {
-      map.add(flightLine)
+    // 存储所有航线（如果有lines字段）
+    if (response.data.lines && Array.isArray(response.data.lines) && response.data.lines.length > 0) {
+      console.log('收到多条航线:', response.data.lines.length)
+      flightLines.value = response.data.lines.map((line: any) => ({
+        path: line.path as [number, number][],
+        waypoints: line.waypoints as [number, number][],
+        capturePoints: (line.capturePoints || []) as [number, number][]
+      }))
+      console.log('flightLines.value.length:', flightLines.value.length)
+      // 默认选中第一条
+      selectedLineIndex.value = 0
+      // 使用选中的航线数据
+      const selectedLine = flightLines.value[selectedLineIndex.value]
+      if (selectedLine) {
+        flightData.value = {
+          path: selectedLine.path,
+          waypoints: selectedLine.waypoints,
+          capturePoints: selectedLine.capturePoints
+        }
+      }
+    } else {
+      // 建图模式：只有一条航线
+      console.log('建图模式或没有lines字段，使用单条航线')
+      flightLines.value = [result]
+      selectedLineIndex.value = 0
+      flightData.value = result
     }
 
-    if (showWaypoints.value) {
-      toggleWaypointsByValue(true)
-    }
+    totalLength.value = Math.round(calculatePathLength(flightData.value.path))
 
-    if (showCapturePoints.value) {
-      toggleCapturePoints(true)
+    // 使用选中的航线数据绘制
+    const displayLine = flightLines.value.length > 0 && flightLines.value[selectedLineIndex.value] 
+      ? flightLines.value[selectedLineIndex.value] 
+      : result
+    if (displayLine) {
+      flightLine = new (window as any).AMap.Polyline({
+        path: displayLine.path,
+        strokeColor: '#0000FF',
+        strokeWeight: 5,
+        zIndex: 51,
+        showDir: true,
+        dirColor: '#ff0000'
+      })
+      registerFlightOverlay(flightLine, 'line')
+      if (showPath.value) {
+        map.add(flightLine)
+      }
+
+      if (showWaypoints.value) {
+        toggleWaypointsByValue(true)
+      }
+
+      if (showCapturePoints.value) {
+        toggleCapturePoints(true)
+      }
     }
   } catch (error: any) {
     // 详细的错误日志
@@ -772,6 +825,50 @@ function exportGeojson() {
   URL.revokeObjectURL(url)
 }
 
+function selectLine(index: number) {
+  if (index < 0 || index >= flightLines.value.length) return
+  selectedLineIndex.value = index
+  const selectedLine = flightLines.value[index]
+  if (!selectedLine) return
+  
+  flightData.value = {
+    path: selectedLine.path,
+    waypoints: selectedLine.waypoints,
+    capturePoints: selectedLine.capturePoints
+  }
+  totalLength.value = Math.round(calculatePathLength(selectedLine.path))
+  
+  // 重新绘制地图上的航线
+  stopSimulation()
+  clearFlightOverlays()
+  
+  if (flightLine) {
+    flightLine.setMap(null)
+  }
+  
+  flightLine = new (window as any).AMap.Polyline({
+    path: selectedLine.path,
+    strokeColor: '#0000FF',
+    strokeWeight: 5,
+    zIndex: 51,
+    showDir: true,
+    dirColor: '#ff0000'
+  })
+  registerFlightOverlay(flightLine, 'line')
+  if (showPath.value) {
+    map.add(flightLine)
+  }
+  
+  if (showWaypoints.value) {
+    toggleWaypointsByValue(true)
+  }
+  
+  if (showCapturePoints.value) {
+    toggleCapturePoints(true)
+  }
+}
+
+
 function setMapType(type: 'normal' | 'satellite') {
   mapType.value = type
   if (type === 'satellite') {
@@ -806,6 +903,20 @@ watch(showPath, (newVal) => {
     map.add(flightLine)
   } else {
     map.remove(flightLine)
+  }
+})
+
+// 监听任务类型变化，自动更新航线
+watch(missionType, () => {
+  if (startPoint.value) {
+    updateFlightPath()
+  }
+})
+
+// 监听偏移量变化，自动更新航线（仅倾斜模式）
+watch(lateralOffset, () => {
+  if (missionType.value === 'oblique' && startPoint.value) {
+    updateFlightPath()
   }
 })
 </script>
@@ -886,6 +997,45 @@ body,
 
 .mapTypeControl button:hover {
   background-color: #f0f0f0;
+}
+
+.line-selector {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 2001;
+}
+
+.line-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background-color: rgba(255, 255, 255, 0.9);
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.line-button:hover {
+  background-color: #f5f5f5;
+  border-color: #1890ff;
+}
+
+.line-button.active {
+  background-color: #1890ff;
+  border-color: #1890ff;
+  color: white;
+  font-weight: 600;
 }
 
 .rightBottomPanel {
