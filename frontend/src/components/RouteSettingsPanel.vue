@@ -12,6 +12,7 @@
             <el-radio-group v-model="missionType" size="small">
               <el-radio-button label="mapping">建图航拍</el-radio-button>
               <el-radio-button label="oblique">倾斜摄影</el-radio-button>
+              <el-radio-button label="strip">带状航线</el-radio-button>
             </el-radio-group>
           </el-form-item>
           <el-form-item label="GeoJSON 数据">
@@ -29,7 +30,7 @@
               @click="handleToggleDraw" 
               style="width: 100%"
             >
-              {{ isDrawing ? '完成绘制' : '点击地图绘制区域' }}
+              {{ isDrawing ? '完成绘制' : (missionType === 'strip' ? '点击地图绘制路径' : '点击地图绘制区域') }}
             </el-button>
           </el-form-item>
           <el-form-item>
@@ -133,8 +134,8 @@
             </div>
           </el-form-item>
 
-          <!-- 角度 -->
-          <el-form-item label="角度 (°)">
+          <!-- 角度（仅区域航线显示） -->
+          <el-form-item v-if="missionType !== 'strip'" label="角度 (°)">
             <el-slider
               :model-value="angle"
               @update:model-value="handleAngleChange"
@@ -171,8 +172,38 @@
             </div>
           </el-form-item>
 
-          <!-- 边距 -->
-          <el-form-item label="边距 (m)">
+          <!-- 左带宽（仅带状航线显示） -->
+          <el-form-item
+            v-if="missionType === 'strip'"
+            label="左带宽 (m)"
+          >
+            <el-slider
+              :model-value="props.leftBandwidth"
+              @update:model-value="handleLeftBandwidthChange"
+              :min="0"
+              :max="500"
+              :step="5"
+              show-input
+            />
+          </el-form-item>
+
+          <!-- 右带宽（仅带状航线显示） -->
+          <el-form-item
+            v-if="missionType === 'strip'"
+            label="右带宽 (m)"
+          >
+            <el-slider
+              :model-value="props.rightBandwidth"
+              @update:model-value="handleRightBandwidthChange"
+              :min="0"
+              :max="500"
+              :step="5"
+              show-input
+            />
+          </el-form-item>
+
+          <!-- 边距（仅区域航线显示） -->
+          <el-form-item v-if="missionType !== 'strip'" label="边距 (m)">
             <el-slider
               :model-value="margin"
               @update:model-value="handleMarginChange"
@@ -237,7 +268,7 @@ import { ref, computed, watch } from 'vue'
 
 interface Props {
   geojsonInput: string
-  missionType?: 'mapping' | 'oblique'
+  missionType?: 'mapping' | 'oblique' | 'strip'
   startPoint: [number, number] | null
   endPoint: [number, number] | null
   isPickingStart: boolean
@@ -259,17 +290,21 @@ interface Props {
   showCapturePoints: boolean
   photoInterval: number | null
   gimbalYaw?: number
+  leftBandwidth?: number
+  rightBandwidth?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   missionType: 'mapping',
   gimbalYaw: 0,
   altitude: 200,
+  leftBandwidth: 50,
+  rightBandwidth: 50,
 })
 
 const emit = defineEmits<{
   'update:geojsonInput': [value: string]
-  'update:missionType': [value: 'mapping' | 'oblique']
+  'update:missionType': [value: 'mapping' | 'oblique' | 'strip']
   'update:spacing': [value: number]
   'update:angle': [value: number]
   'update:margin': [value: number]
@@ -293,6 +328,10 @@ const emit = defineEmits<{
   'show-capture-points-change': [value: boolean]
   'update:gimbalYaw': [value: number]
   'lateral-offset-change': [value: number]
+  'update:leftBandwidth': [value: number]
+  'update:rightBandwidth': [value: number]
+  'left-bandwidth-change': [value: number]
+  'right-bandwidth-change': [value: number]
 }>()
 
 // 旁向重叠率（0-100）
@@ -368,7 +407,7 @@ watch(calculatedLateralOffset, (newOffset) => {
 const activeCollapse = ref(['target', 'route', 'results'])
 const missionType = computed({
   get: () => props.missionType,
-  set: (value: 'mapping' | 'oblique') => {
+  set: (value: 'mapping' | 'oblique' | 'strip') => {
     emit('update:missionType', value)
     // 切换任务类型时重新计算偏移量
     if (value === 'oblique' && props.altitude && props.altitude > 0) {
@@ -469,6 +508,16 @@ function handleGimbalYawChange(value: number) {
   } else {
     emit('lateral-offset-change', 0)
   }
+}
+
+function handleLeftBandwidthChange(value: number) {
+  emit('update:leftBandwidth', value)
+  emit('left-bandwidth-change', value)
+}
+
+function handleRightBandwidthChange(value: number) {
+  emit('update:rightBandwidth', value)
+  emit('right-bandwidth-change', value)
 }
 </script>
 

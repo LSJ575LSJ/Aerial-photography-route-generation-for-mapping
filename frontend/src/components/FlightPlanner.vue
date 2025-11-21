@@ -38,6 +38,12 @@
         :gimbalYaw="gimbalYaw"
         @update:gimbalYaw="(val) => (gimbalYaw = val)"
         @lateral-offset-change="(val) => (lateralOffset = val)"
+        :leftBandwidth="leftBandwidth"
+        @update:leftBandwidth="(val) => (leftBandwidth = val)"
+        :rightBandwidth="rightBandwidth"
+        @update:rightBandwidth="(val) => (rightBandwidth = val)"
+        @left-bandwidth-change="updateFlightPath"
+        @right-bandwidth-change="updateFlightPath"
         @toggle-pick-start="togglePickStart"
         @toggle-pick-end="togglePickEnd"
         @apply-geojson="applyGeojson"
@@ -145,7 +151,10 @@ const pickerStatus = ref('')
 const currentSpacing = ref(350)
 const currentAngle = ref(0)
 const currentMargin = ref(0)
-const missionType = ref<'mapping' | 'oblique'>('mapping')
+const missionType = ref<'mapping' | 'oblique' | 'strip'>('mapping')
+const leftBandwidth = ref(50) // 左带宽（米）
+const rightBandwidth = ref(50) // 右带宽（米）
+const stripPath = ref<[number, number][]>([]) // 带状航线路径（LineString）
 const showPath = ref(true)
 const showWaypoints = ref(false)
 const showCapturePoints = ref(false)
@@ -167,8 +176,24 @@ const flightLines = ref<Array<{
 let captureUpdateTimer: number | null = null
 
 // 地图相关
+type StripSegment = {
+  index: number
+  p1: [number, number]
+  p2: [number, number]
+  corners: {
+    leftFront: [number, number]
+    leftBack: [number, number]
+    rightBack: [number, number]
+    rightFront: [number, number]
+  }
+  polygon?: any
+}
+
 let map: any = null
-let polygon: any = null
+let polygon: any = null // 区域航线的多边形
+let stripPathPolyline: any = null // 带状航线的路径线对象
+let stripPathPolygons: any[] = [] // 带状航线的每一段长方形多边形
+let stripSegments: StripSegment[] = [] // 带状航线的每一段长方形数据
 let flightLine: any = null
 let startMarker: any = null
 let endMarker: any = null
@@ -373,32 +398,108 @@ function togglePickEnd() {
 function toggleDraw() {
   if (isDrawing.value) {
     // 完成绘制
-    if (drawingPoints.length < 3) {
-      alert('至少需要3个点才能构成多边形')
-      return
-    }
-    
-    // 闭合多边形（添加第一个点作为最后一个点）
-    const firstPoint = drawingPoints[0]
-    if (!firstPoint) return
-    const closedPath: [number, number][] = [...drawingPoints, firstPoint]
-    
-    // 生成 GeoJSON
-    const geojson = {
-      type: 'Feature',
-      geometry: {
-        type: 'Polygon',
-        coordinates: [closedPath]
+    if (missionType.value === 'strip') {
+      // 带状航线：至少2个点，不闭合
+      if (drawingPoints.length < 2) {
+        alert('至少需要2个点才能构成路径')
+        return
       }
+      
+      // 不闭合，直接使用 drawingPoints
+      const linePath: [number, number][] = [...drawingPoints]
+      
+      // 生成 LineString 类型的 GeoJSON
+      const geojson = {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: linePath
+        }
+      }
+      
+      geojsonInput.value = JSON.stringify(geojson, null, 2)
+      
+      // 存储带状航线路径
+      stripPath.value = linePath
+      
+      // 移除旧的多边形（如果有）
+      if (polygon && polygon.setMap) {
+        polygon.setMap(null)
+      }
+      if (stripPathPolyline && stripPathPolyline.setMap) {
+        stripPathPolyline.setMap(null)
+      }
+      clearStripPolygons()
+      
+      // 使用 Polyline 显示路径
+      stripPathPolyline = new (window as any).AMap.Polyline({
+        path: linePath,
+        strokeColor: '#FF6600',
+        strokeWeight: 3,
+        zIndex: 50
+      })
+      map.add(stripPathPolyline)
+      
+      // 根据带宽生成区域多边形并显示
+      updateStripPathPolygon()
+      
+      updateFlightPath()
+      map.setFitView()
+    } else {
+      // 区域航线：至少3个点，闭合
+      if (drawingPoints.length < 3) {
+        alert('至少需要3个点才能构成多边形')
+        return
+      }
+      
+      // 闭合多边形（添加第一个点作为最后一个点）
+      const firstPoint = drawingPoints[0]
+      if (!firstPoint) return
+      const closedPath: [number, number][] = [...drawingPoints, firstPoint]
+      
+      // 生成 GeoJSON
+      const geojson = {
+        type: 'Feature',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [closedPath]
+        }
+      }
+      
+      geojsonInput.value = JSON.stringify(geojson, null, 2)
+      
+      // 应用 GeoJSON
+      path.value = closedPath
+      
+      // 移除带状航线的路径线（如果有）
+      if (stripPathPolyline && stripPathPolyline.setMap) {
+        stripPathPolyline.setMap(null)
+        stripPathPolyline = null
+      }
+      clearStripPolygons()
+      
+      // 使用 Polygon 显示区域
+      if (!polygon) {
+        polygon = new (window as any).AMap.Polygon({
+          path: closedPath,
+          strokeColor: '#000000',
+          strokeWeight: 2,
+          fillColor: '#3366FF',
+          fillOpacity: 0.3,
+          zIndex: 50
+        })
+        map.add(polygon)
+      } else {
+        polygon.setPath(closedPath)
+        // 确保 polygon 在地图上（可能之前被移除了）
+        if (polygon.getMap() === null) {
+          map.add(polygon)
+        }
+      }
+      
+      updateFlightPath()
+      map.setFitView()
     }
-    
-    geojsonInput.value = JSON.stringify(geojson, null, 2)
-    
-    // 应用 GeoJSON
-    path.value = closedPath
-    polygon.setPath(closedPath)
-    updateFlightPath()
-    map.setFitView()
     
     // 清理绘制状态
     clearDrawing()
@@ -411,7 +512,13 @@ function toggleDraw() {
     pickerStatus.value = ''
     clearDrawing()
     isDrawing.value = true
-    drawingStatus.value = '请在地图上点击添加多边形顶点（至少3个点）'
+    
+    // 根据任务类型显示不同的提示
+    if (missionType.value === 'strip') {
+      drawingStatus.value = '请在地图上点击添加路径点（至少2个点）'
+    } else {
+      drawingStatus.value = '请在地图上点击添加多边形顶点（至少3个点）'
+    }
   }
 }
 
@@ -430,6 +537,26 @@ function clearDrawing() {
   
   // 清空点集合
   drawingPoints = []
+}
+
+function clearStripPolygons() {
+  // 清除地图上的矩形多边形
+  stripSegments.forEach((seg) => {
+    if (seg.polygon && seg.polygon.setMap) {
+      seg.polygon.setMap(null)
+    }
+    seg.polygon = undefined
+  })
+  stripSegments = []
+
+  if (stripPathPolygons.length > 0) {
+    stripPathPolygons.forEach((poly) => {
+      if (poly && poly.setMap) {
+        poly.setMap(null)
+      }
+    })
+    stripPathPolygons = []
+  }
 }
 
 function registerFlightOverlay(overlay: any, type: FlightOverlayType) {
@@ -522,6 +649,227 @@ watch(photoInterval, (val) => {
   }, 300)
 })
 
+// 监听带宽变化，更新带状航线区域显示
+watch([leftBandwidth, rightBandwidth], () => {
+  if (missionType.value === 'strip' && stripPath.value.length >= 2) {
+    updateStripPathPolygon()
+  }
+})
+
+// 监听任务类型变化
+watch(missionType, (newType, oldType) => {
+  // 切换任务类型时清理绘制状态
+  if (isDrawing.value) {
+    clearDrawing()
+    isDrawing.value = false
+    drawingStatus.value = ''
+  }
+  
+  // 切换任务类型时，清理另一个类型的显示
+  if (newType === 'strip' && oldType !== 'strip') {
+    // 切换到带状航线：隐藏区域航线的 polygon
+    if (polygon && polygon.setMap) {
+      polygon.setMap(null)
+    }
+  } else if (newType !== 'strip' && oldType === 'strip') {
+    // 切换到区域航线：清理带状航线的显示，恢复 polygon
+    if (stripPathPolyline && stripPathPolyline.setMap) {
+      stripPathPolyline.setMap(null)
+      stripPathPolyline = null
+    }
+    clearStripPolygons()
+    // 恢复区域航线的 polygon 显示（如果 path 有数据）
+    if (polygon && path.value.length > 0) {
+      polygon.setPath(path.value)
+      // 确保 polygon 在地图上
+      if (polygon.getMap() === null) {
+        map.add(polygon)
+      }
+    }
+  }
+})
+
+/**
+ * 计算两条延长线的交点，用于带状航线生成（不限制在0-1范围内）
+ * @param line1Start - 第一条线的起点
+ * @param line1End - 第一条线的终点
+ * @param line2Start - 第二条线的起点
+ * @param line2End - 第二条线的终点
+ * @returns 交点坐标或 null（如果平行）
+ */
+function findExtendedLineIntersection(
+  line1Start: [number, number],
+  line1End: [number, number],
+  line2Start: [number, number],
+  line2End: [number, number]
+): [number, number] | null {
+  const x1 = line1Start[0], y1 = line1Start[1]
+  const x2 = line1End[0], y2 = line1End[1]
+  const x3 = line2Start[0], y3 = line2Start[1]
+  const x4 = line2End[0], y4 = line2End[1]
+
+  // 计算分母
+  const denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+  
+  // 如果分母为0，说明两条线平行
+  if (Math.abs(denominator) < 1e-10) return null
+
+  // 计算参数 t 和 u（允许超出0-1范围）
+  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denominator
+  const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denominator
+
+  // 计算交点（使用第一条线的参数方程）
+  return [
+    x1 + t * (x2 - x1),
+    y1 + t * (y2 - y1)
+  ]
+}
+
+// 根据当前 corners 更新或创建某一段的多边形
+function updateStripSegmentPolygon(segment: StripSegment) {
+  const { leftFront, leftBack, rightBack, rightFront } = segment.corners
+  const rectPath: [number, number][] = [
+    leftFront,
+    leftBack,
+    rightBack,
+    rightFront,
+    leftFront, // 闭合
+  ]
+
+  if (segment.polygon && segment.polygon.setPath) {
+    segment.polygon.setPath(rectPath)
+  } else {
+    const rectPolygon = new (window as any).AMap.Polygon({
+      path: rectPath,
+      strokeColor: '#3366FF',
+      strokeWeight: 2,
+      fillColor: '#3366FF',
+      fillOpacity: 0.2,
+      zIndex: 49,
+    })
+    segment.polygon = rectPolygon
+    map.add(rectPolygon)
+    stripPathPolygons.push(rectPolygon)
+  }
+}
+
+// 使用延长线交点平滑相邻矩形的连接处，并重绘
+function smoothStripIntersections() {
+  if (stripSegments.length < 2) return
+
+  for (let i = 0; i < stripSegments.length - 1; i++) {
+    const segA = stripSegments[i]
+    const segB = stripSegments[i + 1]
+
+    const {
+      leftFront: LF_A,
+      leftBack: LB_A,
+      rightBack: RB_A,
+      rightFront: RF_A,
+    } = segA.corners
+    const {
+      leftFront: LF_B,
+      leftBack: LB_B,
+      rightBack: RB_B,
+      rightFront: RF_B,
+    } = segB.corners
+
+    // 左侧：第一段 LF_A -> LB_A，第二段 LB_B -> LF_B
+    const leftIntersection = findExtendedLineIntersection(LF_A, LB_A, LB_B, LF_B)
+    if (leftIntersection) {
+      segA.corners.leftBack = leftIntersection
+      segB.corners.leftFront = leftIntersection
+    }
+
+    // 右侧：第一段 RF_A -> RB_A，第二段 RB_B -> RF_B
+    const rightIntersection = findExtendedLineIntersection(RF_A, RB_A, RB_B, RF_B)
+    if (rightIntersection) {
+      segA.corners.rightBack = rightIntersection
+      segB.corners.rightFront = rightIntersection
+    }
+  }
+
+  // 根据更新后的 corners 重绘所有段
+  stripSegments.forEach((seg) => updateStripSegmentPolygon(seg))
+}
+
+// 根据带宽生成带状航线的区域多边形（简化版：每一段生成一个独立长方形）
+function updateStripPathPolygon() {
+  if (stripPath.value.length < 2) return
+
+  // 先移除之前画过的矩形
+  clearStripPolygons()
+  stripSegments = []
+
+  // 对每一段 Pi -> P(i+1) 生成一个长方形
+  for (let i = 0; i < stripPath.value.length - 1; i++) {
+    const p1 = stripPath.value[i]
+    const p2 = stripPath.value[i + 1]
+    if (!p1 || !p2) continue
+
+    // 线段方向
+    const dx = p2[0] - p1[0]
+    const dy = p2[1] - p1[1]
+    const angle = (Math.atan2(dy, dx) * 180) / Math.PI
+
+    // 垂直方向：左侧 / 右侧
+    const leftAngle = angle + 90
+    const rightAngle = angle - 90
+
+    // 用该段中点的纬度估算“1度经纬度对应多少米”
+    const avgLat = (p1[1] + p2[1]) / 2
+    const latRad = (avgLat * Math.PI) / 180
+    const metersPerDegLng = 111320 * Math.cos(latRad)
+    const metersPerDegLat = 111320
+
+    // 左侧偏移向量（用左带宽）
+    const leftAngleRad = (leftAngle * Math.PI) / 180
+    const leftOffsetLng =
+      (leftBandwidth.value / metersPerDegLng) * Math.cos(leftAngleRad)
+    const leftOffsetLat =
+      (leftBandwidth.value / metersPerDegLat) * Math.sin(leftAngleRad)
+
+    // 右侧偏移向量（用右带宽）
+    const rightAngleRad = (rightAngle * Math.PI) / 180
+    const rightOffsetLng =
+      (rightBandwidth.value / metersPerDegLng) * Math.cos(rightAngleRad)
+    const rightOffsetLat =
+      (rightBandwidth.value / metersPerDegLat) * Math.sin(rightAngleRad)
+
+    // 四个角点：P1 左 / P2 左 / P2 右 / P1 右
+    const p1Left: [number, number] = [p1[0] + leftOffsetLng, p1[1] + leftOffsetLat]
+    const p2Left: [number, number] = [p2[0] + leftOffsetLng, p2[1] + leftOffsetLat]
+    const p2Right: [number, number] = [p2[0] + rightOffsetLng, p2[1] + rightOffsetLat]
+    const p1Right: [number, number] = [p1[0] + rightOffsetLng, p1[1] + rightOffsetLat]
+
+    // 统一按顺序保存角点：左前、左后、右后、右前
+    const leftFront: [number, number] = p1Left
+    const leftBack: [number, number] = p2Left
+    const rightBack: [number, number] = p2Right
+    const rightFront: [number, number] = p1Right
+
+    // 保存到段数组，方便后续计算交点 / 重绘
+    const segment: StripSegment = {
+      index: i,
+      p1,
+      p2,
+      corners: {
+        leftFront,
+        leftBack,
+        rightBack,
+        rightFront,
+      },
+      polygon: undefined,
+    }
+
+    stripSegments.push(segment)
+    updateStripSegmentPolygon(segment)
+  }
+
+  // 生成所有基础矩形后，再进行交点平滑处理并重绘
+  smoothStripIntersections()
+}
+
 async function updateFlightPath() {
   if (!map) return
 
@@ -531,19 +879,44 @@ async function updateFlightPath() {
   if (!startPoint.value) return
 
   try {
-    // 调用后端 API 生成航线（固定使用水平扫描，通过 angle 参数控制方向）
-    const response = await httpClient.post('/flight-path/generate', {
-      polygon: path.value.slice(0, -1),
-      spacing: currentSpacing.value,
-      startPoint: startPoint.value,
-      endPoint: endPoint.value || undefined,
-      angle: currentAngle.value,
-      margin: currentMargin.value,
-      missionType: missionType.value,
-      gimbalYaw: missionType.value === 'oblique' ? gimbalYaw.value : undefined,
-      lateralOffset: missionType.value === 'oblique' ? lateralOffset.value : undefined,
-      captureInterval: photoInterval.value || null
-    })
+    // 根据任务类型构建不同的请求参数
+    let requestBody: any
+    
+    if (missionType.value === 'strip') {
+      // 带状航线
+      if (stripPath.value.length < 2) {
+        console.warn('带状航线路径点不足，无法生成航线')
+        return
+      }
+      requestBody = {
+        path: stripPath.value, // LineString 路径
+        spacing: currentSpacing.value,
+        startPoint: startPoint.value,
+        endPoint: endPoint.value || undefined,
+        leftBandwidth: leftBandwidth.value,
+        rightBandwidth: rightBandwidth.value,
+        missionType: missionType.value,
+        margin: 0, // 带状航线边距固定为0
+        captureInterval: photoInterval.value || null
+      }
+    } else {
+      // 区域航线（建图/倾斜）
+      requestBody = {
+        polygon: path.value.slice(0, -1),
+        spacing: currentSpacing.value,
+        startPoint: startPoint.value,
+        endPoint: endPoint.value || undefined,
+        angle: currentAngle.value,
+        margin: currentMargin.value,
+        missionType: missionType.value,
+        gimbalYaw: missionType.value === 'oblique' ? gimbalYaw.value : undefined,
+        lateralOffset: missionType.value === 'oblique' ? lateralOffset.value : undefined,
+        captureInterval: photoInterval.value || null
+      }
+    }
+    
+    // 调用后端 API 生成航线
+    const response = await httpClient.post('/flight-path/generate', requestBody)
 
     // 转换响应数据格式
     const result = {
@@ -760,15 +1133,77 @@ function startAnimation() {
 function applyGeojson() {
   try {
     const data = JSON.parse(geojsonInput.value)
-    if (
-      data.type !== 'Feature' ||
-      data.geometry.type !== 'Polygon' ||
-      !Array.isArray(data.geometry.coordinates?.[0])
-    ) {
-      throw new Error('无效的GeoJSON格式')
+    
+    if (data.type !== 'Feature') {
+      throw new Error('无效的GeoJSON格式，必须是Feature类型')
     }
-    path.value = data.geometry.coordinates[0]
-    polygon.setPath(path.value)
+    
+    if (data.geometry.type === 'LineString') {
+      // 带状航线：LineString
+      if (!Array.isArray(data.geometry.coordinates)) {
+        throw new Error('无效的LineString格式')
+      }
+      
+      stripPath.value = data.geometry.coordinates
+      
+      // 移除旧的多边形（如果有）
+      if (polygon && polygon.setMap) {
+        polygon.setMap(null)
+      }
+      if (stripPathPolyline && stripPathPolyline.setMap) {
+        stripPathPolyline.setMap(null)
+      }
+      clearStripPolygons()
+      
+      // 使用 Polyline 显示路径
+      stripPathPolyline = new (window as any).AMap.Polyline({
+        path: stripPath.value,
+        strokeColor: '#FF6600',
+        strokeWeight: 3,
+        zIndex: 50
+      })
+      map.add(stripPathPolyline)
+      
+      // 根据带宽生成区域多边形并显示
+      updateStripPathPolygon()
+      
+    } else if (data.geometry.type === 'Polygon') {
+      // 区域航线：Polygon
+      if (!Array.isArray(data.geometry.coordinates?.[0])) {
+        throw new Error('无效的Polygon格式')
+      }
+      
+      path.value = data.geometry.coordinates[0]
+      
+      // 移除带状航线的路径线（如果有）
+      if (stripPathPolyline && stripPathPolyline.setMap) {
+        stripPathPolyline.setMap(null)
+        stripPathPolyline = null
+      }
+      clearStripPolygons()
+      
+      // 使用 Polygon 显示区域
+      if (!polygon) {
+        polygon = new (window as any).AMap.Polygon({
+          path: path.value,
+          strokeColor: '#000000',
+          strokeWeight: 2,
+          fillColor: '#3366FF',
+          fillOpacity: 0.3,
+          zIndex: 50
+        })
+        map.add(polygon)
+      } else {
+        polygon.setPath(path.value)
+        // 确保 polygon 在地图上（可能之前被移除了）
+        if (polygon.getMap() === null) {
+          map.add(polygon)
+        }
+      }
+    } else {
+      throw new Error('不支持的GeoJSON类型，仅支持Polygon或LineString')
+    }
+    
     updateFlightPath()
     map.setFitView()
   } catch (e: any) {
