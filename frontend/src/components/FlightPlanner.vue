@@ -897,7 +897,21 @@ async function updateFlightPath() {
         rightBandwidth: rightBandwidth.value,
         missionType: missionType.value,
         margin: 0, // 带状航线边距固定为0
-        captureInterval: photoInterval.value || null
+        captureInterval: photoInterval.value || null,
+        // 将前端平滑后的矩形段一并传给后端，便于后端直接使用
+        segments: stripSegments.map((seg) => ({
+          index: seg.index,
+          p1: seg.p1,
+          p2: seg.p2,
+          // 按固定顺序传 corners，后端可以按约定解析：
+          // 0: leftFront, 1: leftBack, 2: rightBack, 3: rightFront
+          corners: [
+            seg.corners.leftFront,
+            seg.corners.leftBack,
+            seg.corners.rightBack,
+            seg.corners.rightFront,
+          ],
+        })),
       }
     } else {
       // 区域航线（建图/倾斜）
