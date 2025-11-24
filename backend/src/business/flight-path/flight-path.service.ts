@@ -445,9 +445,40 @@ export class FlightPathService {
       this.logger.warn(`边距值 ${margin}m 被限制到 ${clampedMargin}m (范围: 0-5000m)`);
     }
 
+    // 计算中轴线和高度
+    const centerLat = (bbox.min[1] + bbox.max[1]) / 2;
+    const latDiff = bbox.max[1] - bbox.min[1];
+    const heightMeters = latDiff * 111000; // 转换为米
+    const halfSpacingDegrees = spacingDegrees / 2;
+
+    // 收集所有需要扫描的纬度值（中轴线对称算法）
+    const scanLats: number[] = [];
+
+    if (heightMeters <= spacing) {
+      // 情况1：边界盒子高度 <= 相机拍摄宽度，只在中间画一条线
+      scanLats.push(centerLat);
+    } else {
+      // 情况2：边界盒子高度 > 相机拍摄宽度，对称生成，不画中轴线
+      // 先向上收集（从 中轴线 + spacing/2 开始）
+      let upperLat = centerLat + halfSpacingDegrees;
+      while (upperLat <= bbox.max[1]) {
+        scanLats.push(upperLat);
+        upperLat += spacingDegrees;
+      }
+      
+      // 再向下收集（从 中轴线 - spacing/2 开始）
+      let lowerLat = centerLat - halfSpacingDegrees;
+      while (lowerLat >= bbox.min[1]) {
+        scanLats.push(lowerLat);
+        lowerLat -= spacingDegrees;
+      }
+    }
+
+    // 按纬度排序（从下到上），确保最终输出顺序与原来一致
+    scanLats.sort((a, b) => a - b);
+
     // 水平方向扫描（固定使用水平扫描）
-    let currentLat = bbox.min[1];
-    while (currentLat <= bbox.max[1]) {
+    for (const currentLat of scanLats) {
       // 与多边形求交点的平行线
       const line: [Point, Point] = [
         [bbox.min[0] - 0.01, currentLat],
@@ -470,7 +501,6 @@ export class FlightPathService {
           captureSegments,
         );
       }
-      currentLat += spacingDegrees;
     }
     
     this.logger.debug(`水平扫描完成，生成 ${groups.length} 个交点对组`);
