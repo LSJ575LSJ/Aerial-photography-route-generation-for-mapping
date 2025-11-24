@@ -54,14 +54,58 @@ export class StripMissionStrategy implements FlightMissionStrategy {
       };
     });
 
-    const primary = lines[0] ?? { path: [], waypoints: [], capturePoints: [] };
+    // 去掉每一段的首尾点（startPoint 和 endPoint），只保留扫描线点
+    const trimmedLines: FlightPathLine[] = lines.map((line) => {
+      // 去掉 path 的首尾点
+      let trimmedPath = line.path;
+      if (line.path.length >= 2) {
+        trimmedPath = line.path.slice(1, -1);
+      } else if (line.path.length === 1) {
+        // 如果只有1个点，保留它（可能是特殊情况）
+        trimmedPath = line.path;
+      }
+
+      return {
+        path: trimmedPath,
+        waypoints: line.waypoints, // waypoints 通常不包含起降点，直接使用
+        capturePoints: line.capturePoints, // capturePoints 通常不包含起降点，直接使用
+      };
+    });
+
+    // 合并所有段的航线成一条连续路径
+    const mergedPath: Point[] = [];
+    const mergedWaypoints: Point[] = [];
+    const mergedCapturePoints: Point[] = [];
+
+    for (const line of trimmedLines) {
+      if (line.path.length > 0) {
+        mergedPath.push(...line.path);
+      }
+      if (line.waypoints.length > 0) {
+        mergedWaypoints.push(...line.waypoints);
+      }
+      if (line.capturePoints && line.capturePoints.length > 0) {
+        mergedCapturePoints.push(...line.capturePoints);
+      }
+    }
+
+    // 构建合并后的主航线
+    const primary: FlightPathLine = {
+      path: mergedPath,
+      waypoints: mergedWaypoints,
+      capturePoints: mergedCapturePoints.length > 0 ? mergedCapturePoints : undefined,
+    };
+
+    this.logger.debug(
+      `带状航线合并完成: ${lines.length} 段 -> 路径点数: ${mergedPath.length}, 航点数: ${mergedWaypoints.length}, 拍照点数: ${mergedCapturePoints.length}`,
+    );
 
     return {
       path: primary.path,
       waypoints: primary.waypoints,
       capturePoints: primary.capturePoints,
       captureInterval,
-      lines,
+      lines: trimmedLines, // 保留各段的独立航线（已去掉首尾点），供前端选择显示
     };
   }
 

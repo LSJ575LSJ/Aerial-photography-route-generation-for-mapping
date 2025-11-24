@@ -939,8 +939,28 @@ async function updateFlightPath() {
       capturePoints: (response.data.capturePoints || []) as [number, number][]
     }
 
-    // 存储所有航线（如果有lines字段）
-    if (response.data.lines && Array.isArray(response.data.lines) && response.data.lines.length > 0) {
+    // 根据任务类型处理航线数据
+    if (missionType.value === 'strip') {
+      // 带状航线：使用合并后的完整路径（所有段已连接）
+      console.log('带状航线模式：使用合并后的完整路径')
+      flightData.value = {
+        path: response.data.path as [number, number][],
+        waypoints: response.data.waypoints as [number, number][],
+        capturePoints: (response.data.capturePoints || []) as [number, number][]
+      }
+      // 带状航线也保存 lines 供参考（如果需要）
+      if (response.data.lines && Array.isArray(response.data.lines) && response.data.lines.length > 0) {
+        flightLines.value = response.data.lines.map((line: any) => ({
+          path: line.path as [number, number][],
+          waypoints: line.waypoints as [number, number][],
+          capturePoints: (line.capturePoints || []) as [number, number][]
+        }))
+      } else {
+        flightLines.value = [flightData.value]
+      }
+      selectedLineIndex.value = 0
+    } else if (response.data.lines && Array.isArray(response.data.lines) && response.data.lines.length > 0) {
+      // 倾斜摄影等模式：有多条航线，可以选择
       console.log('收到多条航线:', response.data.lines.length)
       flightLines.value = response.data.lines.map((line: any) => ({
         path: line.path as [number, number][],
@@ -970,9 +990,12 @@ async function updateFlightPath() {
     totalLength.value = Math.round(calculatePathLength(flightData.value.path))
 
     // 使用选中的航线数据绘制
-    const displayLine = flightLines.value.length > 0 && flightLines.value[selectedLineIndex.value] 
-      ? flightLines.value[selectedLineIndex.value] 
-      : result
+    // 优先使用 flightData.value（带状航线是合并后的完整路径，其他类型是选中的航线）
+    const displayLine = flightData.value && flightData.value.path && flightData.value.path.length > 0
+      ? flightData.value
+      : (flightLines.value.length > 0 && flightLines.value[selectedLineIndex.value] 
+          ? flightLines.value[selectedLineIndex.value] 
+          : result)
     if (displayLine) {
       flightLine = new (window as any).AMap.Polyline({
         path: displayLine.path,
