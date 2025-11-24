@@ -3,8 +3,10 @@ import type {
   GeneratePathRequest,
   GeneratePathResponse,
   FlightMissionType,
+  Point,
 } from './flight-path.interface';
 import { MissionStrategyFactory } from '../../common/flight-path/mission-strategy.factory';
+import type { StripSegmentPayload } from '../../common/flight-path/mission-strategy.interface';
 
 @Controller('flight-path')
 export class FlightPathController {
@@ -20,6 +22,8 @@ export class FlightPathController {
     this.logger.log(`请求时间: ${new Date().toLocaleString()}`);
     this.logger.log('请求参数:', JSON.stringify({
       polygon: body.polygon?.length || 0,
+      path: body.path?.length || 0,
+      segments: body.segments?.length || 0,
       spacing: body.spacing,
       startPoint: body.startPoint,
       endPoint: body.endPoint,
@@ -29,11 +33,15 @@ export class FlightPathController {
       missionType: body.missionType ?? 'mapping',
       gimbalYaw: body.gimbalYaw,
       lateralOffset: body.lateralOffset,
+      leftBandwidth: body.leftBandwidth,
+      rightBandwidth: body.rightBandwidth,
     }, null, 2));
 
     try {
       // 参数验证
-      if (!body.polygon || body.polygon.length === 0) {
+      const missionType: FlightMissionType = body.missionType ?? 'mapping';
+
+      if ((!body.polygon || body.polygon.length === 0) && missionType !== 'strip') {
         this.logger.warn('多边形为空');
       }
       if (!body.startPoint || body.startPoint.length !== 2) {
@@ -46,10 +54,9 @@ export class FlightPathController {
       }
 
       // 转换请求数据到内部类型
-      const polygon: [number, number][] = body.polygon.map((p) => [
-        p[0],
-        p[1],
-      ]) as [number, number][];
+      const polygon: Point[] = Array.isArray(body.polygon)
+        ? body.polygon.map((p) => [p[0], p[1]] as Point)
+        : [];
       const startPoint: [number, number] = [
         body.startPoint[0],
         body.startPoint[1],
@@ -60,9 +67,51 @@ export class FlightPathController {
       const angle = body.angle ?? 0;
       const margin = body.margin ?? 0;
       const captureInterval = body.captureInterval ?? null;
-      const missionType: FlightMissionType = body.missionType ?? 'mapping';
       const gimbalYaw = body.gimbalYaw ?? 0;
       const lateralOffset = body.lateralOffset ?? null;
+      const leftBandwidth = body.leftBandwidth ?? null;
+      const rightBandwidth = body.rightBandwidth ?? null;
+      const stripPath: Point[] | null = Array.isArray(body.path)
+        ? body.path
+            .filter((p) => Array.isArray(p) && p.length === 2)
+            .map((p) => [p[0], p[1]] as Point)
+        : null;
+      const stripSegments: StripSegmentPayload[] =
+        missionType === 'strip' && Array.isArray(body.segments)
+          ? body.segments
+              .map((segment) => {
+                if (
+                  typeof segment !== 'object' ||
+                  !Array.isArray(segment.corners) ||
+                  segment.corners.length < 4
+                ) {
+                  return null;
+                }
+                const toPoint = (p?: number[]): Point | null =>
+                  Array.isArray(p) && p.length === 2 ? [p[0], p[1]] : null;
+                const corners = segment.corners
+                  .slice(0, 4)
+                  .map((corner) => toPoint(corner))
+                  .filter((corner): corner is Point => !!corner);
+                if (corners.length < 4) {
+                  return null;
+                }
+                const fallbackP1 = corners[0];
+                const fallbackP2 = corners[1];
+                const p1 = toPoint(segment.p1) ?? fallbackP1;
+                const p2 = toPoint(segment.p2) ?? fallbackP2;
+                if (!p1 || !p2) {
+                  return null;
+                }
+                return {
+                  index: segment.index ?? 0,
+                  p1,
+                  p2,
+                  corners,
+                } as StripSegmentPayload;
+              })
+              .filter((seg): seg is StripSegmentPayload => !!seg)
+          : [];
 
       this.logger.log('开始生成航线...');
       const startTime = Date.now();
@@ -79,6 +128,10 @@ export class FlightPathController {
         captureInterval,
         gimbalYaw,
         lateralOffset,
+        stripPath,
+        stripSegments,
+        leftBandwidth,
+        rightBandwidth,
       });
 
       const duration = Date.now() - startTime;

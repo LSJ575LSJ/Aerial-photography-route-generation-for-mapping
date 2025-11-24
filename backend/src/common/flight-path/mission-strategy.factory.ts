@@ -3,6 +3,7 @@ import { FlightMissionType } from '../../business/flight-path/flight-path.interf
 import { FlightMissionStrategy } from './mission-strategy.interface';
 import { MappingMissionStrategy } from './mapping/mapping.strategy';
 import { ObliqueMissionStrategy } from './oblique/oblique.strategy';
+import { StripMissionStrategy } from './strip/strip.strategy';
 
 @Injectable()
 export class MissionStrategyFactory {
@@ -11,10 +12,12 @@ export class MissionStrategyFactory {
   constructor(
     mappingStrategy: MappingMissionStrategy,
     obliqueStrategy: ObliqueMissionStrategy,
+    stripStrategy: StripMissionStrategy,
   ) {
     this.registry = {
       mapping: mappingStrategy,
       oblique: obliqueStrategy,
+      strip: stripStrategy,
     };
   }
 

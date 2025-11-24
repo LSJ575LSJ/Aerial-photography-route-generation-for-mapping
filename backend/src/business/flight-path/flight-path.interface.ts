@@ -8,7 +8,17 @@ export type Point = [number, number];
  */
 export type Polygon = Point[];
 
-export type FlightMissionType = 'mapping' | 'oblique';
+export type FlightMissionType = 'mapping' | 'oblique' | 'strip';
+
+export interface StripSegmentDto {
+  index: number;
+  p1: Point;
+  p2: Point;
+  /**
+   * 角点顺序：leftFront, leftBack, rightBack, rightFront
+   */
+  corners: Point[];
+}
 
 /**
  * 边界框类型
@@ -68,7 +78,7 @@ export interface FlightPathGenerationOptions {
  * 生成航线请求接口（用于 Controller）
  */
 export interface GeneratePathRequest {
-  polygon: number[][];  // [[lng, lat], [lng, lat], ...]
+  polygon?: number[][];  // [[lng, lat], [lng, lat], ...]
   spacing: number;
   startPoint: number[];  // [lng, lat]
   endPoint?: number[];   // [lng, lat] | null
@@ -78,6 +88,18 @@ export interface GeneratePathRequest {
   gimbalYaw?: number | null;
   lateralOffset?: number | null; // 侧向偏移距离（米），由前端计算：高度 * tan(云台垂直夹角)
   captureInterval?: number | null; // 拍照间隔（米），由前端计算
+  /**
+   * 带状航线专用
+   */
+  path?: number[][]; // 主路径点集合
+  segments?: {
+    index: number;
+    p1: number[];
+    p2: number[];
+    corners: number[][];
+  }[];
+  leftBandwidth?: number;
+  rightBandwidth?: number;
 }
 
 /**
