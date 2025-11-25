@@ -46,8 +46,8 @@ body, html, #app {
 
 .camera-card-container {
   position: absolute;
-  top: 20px;
-  right: 20px;
+  top: 150px;
+  right: 10px;
   z-index: 2000;
 }
 </style>
