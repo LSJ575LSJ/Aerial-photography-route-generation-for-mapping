@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import proj4 from 'proj4';
 import {
   FlightMissionType,
   FlightPathLine,
@@ -17,6 +18,10 @@ import {
 export class StripMissionStrategy implements FlightMissionStrategy {
   readonly type: FlightMissionType = 'strip';
   private readonly logger = new Logger(StripMissionStrategy.name);
+  // WGS84 地理坐标系（经纬度）
+  private readonly wgs84 = 'EPSG:4326';
+  // Web Mercator 投影坐标系，用于在平面上按米进行几何计算
+  private readonly webMercator = 'EPSG:3857';
 
   constructor(private readonly flightPathService: FlightPathService) {}
 
@@ -123,8 +128,15 @@ export class StripMissionStrategy implements FlightMissionStrategy {
     return [leftFront, leftBack, rightBack, rightFront, leftFront];
   }
 
+  /**
+   * 计算带状航线段 p1 -> p2 的航向角（度）
+   * 为保证与后端航线生成逻辑一致，先将经纬度投影到 Web Mercator 平面，
+   * 在米单位的平面坐标中使用 atan2 计算角度。
+   */
   private calculateHeading(p1: Point, p2: Point): number {
-    const angle = (Math.atan2(p2[1] - p1[1], p2[0] - p1[0]) * 180) / Math.PI;
+    const [x1, y1] = proj4(this.wgs84, this.webMercator, p1);
+    const [x2, y2] = proj4(this.wgs84, this.webMercator, p2);
+    const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
     return ((angle % 360) + 360) % 360;
   }
 }

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import proj4 from 'proj4';
 import {
   Point,
   Polygon,
@@ -12,6 +13,37 @@ import {
 @Injectable()
 export class FlightPathService {
   private readonly logger = new Logger(FlightPathService.name);
+  private readonly wgs84 = 'EPSG:4326';
+  private readonly webMercator = 'EPSG:3857';
+
+  /**
+   * 将经纬度坐标（WGS84）投影到 Web Mercator 平面，返回单位近似为米的平面坐标
+   */
+  private toMercator(point: Point): [number, number] {
+    return proj4(this.wgs84, this.webMercator, point);
+  }
+
+  /**
+   * 将 Web Mercator 平面坐标反投影回经纬度坐标（WGS84）
+   */
+  private fromMercator(coord: [number, number]): Point {
+    const [lng, lat] = proj4(this.webMercator, this.wgs84, coord);
+    return [lng, lat];
+  }
+
+  /**
+   * 将纬度转换为 Web Mercator 平面上的 Y 坐标（米），用于按米计算扫描线位置
+   */
+  private latToY(lat: number): number {
+    return this.toMercator([0, lat])[1];
+  }
+
+  /**
+   * 将 Web Mercator 平面上的 Y 坐标（米）转换回纬度
+   */
+  private yToLat(y: number): number {
+    return this.fromMercator([0, y])[1];
+  }
   /**
    * 计算两点之间的距离
    * @param point1 - 第一个点的坐标 [经度, 纬度]
@@ -207,17 +239,20 @@ export class FlightPathService {
    * @returns 旋转后的点坐标
    */
   private rotatePoint(point: Point, center: Point, angleDeg: number): Point {
+    const [x1, y1] = this.toMercator(point);
+    const [cx, cy] = this.toMercator(center);
+
     const angleRad = (angleDeg * Math.PI) / 180;
     const cos = Math.cos(angleRad);
     const sin = Math.sin(angleRad);
 
-    const translatedX = point[0] - center[0];
-    const translatedY = point[1] - center[1];
+    const translatedX = x1 - cx;
+    const translatedY = y1 - cy;
 
     const rotatedX = translatedX * cos - translatedY * sin;
     const rotatedY = translatedX * sin + translatedY * cos;
 
-    return [rotatedX + center[0], rotatedY + center[1]];
+    return this.fromMercator([rotatedX + cx, rotatedY + cy]);
   }
 
   /**
@@ -239,25 +274,15 @@ export class FlightPathService {
    */
   private applyLateralOffset(points: Point[], offsetMeters: number, angleDeg: number): Point[] {
     if (offsetMeters <= 0 || points.length === 0) return points;
-    
-    // 将偏移距离转换为经纬度偏移量（粗略估算）
-    // 1度经度 ≈ 111320 * cos(纬度) 米
-    // 1度纬度 ≈ 111320 米
-    // 这里使用平均纬度（取第一个点的纬度）来估算
-    const avgLat = points[0]?.[1] ?? 39.9; // 默认北京纬度
-    const latRad = (avgLat * Math.PI) / 180;
-    const metersPerDegLng = 111320 * Math.cos(latRad);
-    const metersPerDegLat = 111320;
-    
-    // 计算偏移向量（经纬度单位）
+
     const angleRad = (angleDeg * Math.PI) / 180;
-    const offsetLng = (offsetMeters / metersPerDegLng) * Math.cos(angleRad);
-    const offsetLat = (offsetMeters / metersPerDegLat) * Math.sin(angleRad);
-    
-    return points.map((point) => [
-      point[0] + offsetLng,
-      point[1] + offsetLat,
-    ]);
+    const offsetX = Math.cos(angleRad) * offsetMeters;
+    const offsetY = Math.sin(angleRad) * offsetMeters;
+
+    return points.map((point) => {
+      const [x, y] = this.toMercator(point);
+      return this.fromMercator([x + offsetX, y + offsetY]);
+    });
   }
 
   /**
@@ -280,6 +305,7 @@ export class FlightPathService {
     captureInterval: number | null = null,
     options: FlightPathGenerationOptions = {},
   ): FlightPathResult {
+    // 统一在水平对齐的坐标系中生成航线，再根据角度和偏移转换回原始坐标系
     const baseMargin = margin ?? 0;
     const lateralOffsetRaw = options.lateralOffset ?? 0;
     const lateralOffset = Number.isFinite(lateralOffsetRaw) ? lateralOffsetRaw : 0;
@@ -306,9 +332,9 @@ export class FlightPathService {
         this.logger.warn('多边形为空，将生成从起飞点到降落点的直线路径');
       }
       
-      const rotationCenter = hasPolygon
-        ? this.getPolygonCentroid(normalizedPolygon)
-        : startPoint;
+      const rotationCenter =
+        options.rotationCenterOverride ??
+        (hasPolygon ? this.getPolygonCentroid(normalizedPolygon) : startPoint);
 
       this.logger.debug(`旋转中心: [${rotationCenter[0].toFixed(6)}, ${rotationCenter[1].toFixed(6)}]`);
 
@@ -336,6 +362,7 @@ export class FlightPathService {
         rotatedEnd,
         marginForScan,
         captureInterval ?? 0,
+        options.alignedBoundingBox ?? null,
       );
 
       this.logger.debug(`对齐坐标系中生成的路径点数: ${alignedResult.path.length}, 航点数: ${alignedResult.waypoints.length}`);
@@ -412,6 +439,7 @@ export class FlightPathService {
     endPoint: Point | null,
     margin = 0,
     captureInterval = 0,
+    bboxOverride: BoundingBox | null = null,
   ): FlightPathResult {
     if (polygon.length === 0) {
       this.logger.debug('多边形为空，生成直线路径');
@@ -432,49 +460,41 @@ export class FlightPathService {
       };
     }
 
-    const bbox = this.calculateBoundingBox(polygon);
+    const bbox = bboxOverride ?? this.calculateBoundingBox(polygon);
     this.logger.debug(`边界框: min[${bbox.min[0].toFixed(6)}, ${bbox.min[1].toFixed(6)}], max[${bbox.max[0].toFixed(6)}, ${bbox.max[1].toFixed(6)}]`);
     
     // groups[i] 存储所有平行线的第 i 对交点（即第 2i+1, 2i+2 个交点）
     const groups: Intersection[][] = [];
     const captureSegments: [Point, Point][] = [];
-    const spacingDegrees = spacing / 111000; // 转换米到度数（粗略）
     const clampedMargin = Math.min(Math.max(margin, 0), 5000);
     
     if (clampedMargin !== margin) {
       this.logger.warn(`边距值 ${margin}m 被限制到 ${clampedMargin}m (范围: 0-5000m)`);
     }
 
-    // 计算中轴线和高度
-    const centerLat = (bbox.min[1] + bbox.max[1]) / 2;
-    const latDiff = bbox.max[1] - bbox.min[1];
-    const heightMeters = latDiff * 111000; // 转换为米
-    const halfSpacingDegrees = spacingDegrees / 2;
+    const minY = this.latToY(bbox.min[1]);
+    const maxY = this.latToY(bbox.max[1]);
+    const centerY = (minY + maxY) / 2;
+    const heightMeters = Math.abs(maxY - minY);
 
-    // 收集所有需要扫描的纬度值（中轴线对称算法）
-    const scanLats: number[] = [];
-
+    const scanYs: number[] = [];
     if (heightMeters <= spacing) {
-      // 情况1：边界盒子高度 <= 相机拍摄宽度，只在中间画一条线
-      scanLats.push(centerLat);
+      scanYs.push(centerY);
     } else {
-      // 情况2：边界盒子高度 > 相机拍摄宽度，对称生成，不画中轴线
-      // 先向上收集（从 中轴线 + spacing/2 开始）
-      let upperLat = centerLat + halfSpacingDegrees;
-      while (upperLat <= bbox.max[1]) {
-        scanLats.push(upperLat);
-        upperLat += spacingDegrees;
+      let upperY = centerY + spacing / 2;
+      while (upperY <= maxY) {
+        scanYs.push(upperY);
+        upperY += spacing;
       }
-      
-      // 再向下收集（从 中轴线 - spacing/2 开始）
-      let lowerLat = centerLat - halfSpacingDegrees;
-      while (lowerLat >= bbox.min[1]) {
-        scanLats.push(lowerLat);
-        lowerLat -= spacingDegrees;
+
+      let lowerY = centerY - spacing / 2;
+      while (lowerY >= minY) {
+        scanYs.push(lowerY);
+        lowerY -= spacing;
       }
     }
 
-    // 按纬度排序（从下到上），确保最终输出顺序与原来一致
+    const scanLats = scanYs.map((y) => this.yToLat(y));
     scanLats.sort((a, b) => a - b);
 
     // 水平方向扫描（固定使用水平扫描）
@@ -605,7 +625,7 @@ export class FlightPathService {
     margin: number,
     captureSegments: [Point, Point][],
   ): void {
-    // 递归处理第 j 对交点
+    // 递归处理第 j 对交点，将同一条扫描线的交点对按顺序分配到不同组
     function processPair(j: number): void {
       // 如果当前线没有第 j 对（即 2*j+1 超出长度），停止
       if (j * 2 + 1 >= intersections.length) return;
@@ -625,18 +645,15 @@ export class FlightPathService {
         let adjustedPoint2 = point2;
 
         if (margin > 0) {
-          const latRad = (currentLat * Math.PI) / 180;
-          const cosLat = Math.cos(latRad);
-          const metersPerDegLng =
-            Math.max(Math.abs(cosLat), 1e-6) * 111320; // 避免除以0
-          const marginLonDeg = margin / metersPerDegLng;
+          const [x1, y1] = this.toMercator(point1.point);
+          const [x2, y2] = this.toMercator(point2.point);
 
           adjustedPoint1 = {
-            point: [point1.point[0] - marginLonDeg, point1.point[1]],
+            point: this.fromMercator([x1 - margin, y1]),
             segmentIndex: point1.segmentIndex,
           };
           adjustedPoint2 = {
-            point: [point2.point[0] + marginLonDeg, point2.point[1]],
+            point: this.fromMercator([x2 + margin, y2]),
             segmentIndex: point2.segmentIndex,
           };
         }

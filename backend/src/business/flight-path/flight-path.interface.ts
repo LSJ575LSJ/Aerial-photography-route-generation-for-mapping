@@ -72,6 +72,8 @@ export interface FlightPathGenerationOptions {
   gimbalPitchDeg?: number;
   lateralOffset?: number;
   lateralOffsetDirection?: number | null;
+  rotationCenterOverride?: Point | null;
+  alignedBoundingBox?: BoundingBox | null;
 }
 
 /**
