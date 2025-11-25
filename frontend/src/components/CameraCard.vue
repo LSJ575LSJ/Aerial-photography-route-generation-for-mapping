@@ -157,7 +157,7 @@ handleCalculate()
 
 <style scoped>
 .camera-card {
-  width: 320px;
+  width: 280px;
 }
 
 .card-title {

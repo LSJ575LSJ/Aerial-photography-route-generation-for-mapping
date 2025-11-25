@@ -122,12 +122,40 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
-import {
-  calculateDistance,
-  calculatePathLength
-} from '@/utils/flightPath'
+import proj4 from 'proj4'
 import { httpClient } from '@/router/utils/http'
 import RouteSettingsPanel from './RouteSettingsPanel.vue'
+
+type Point = [number, number]
+
+// 计算两点之间的球面距离（米），与后端 FlightPathService 中实现保持一致
+function calculateDistance(point1: Point, point2: Point): number {
+  const R = 6371000 // 地球半径（米）
+  const lat1 = (point1[1] * Math.PI) / 180
+  const lat2 = (point2[1] * Math.PI) / 180
+  const dLat = ((point2[1] - point1[1]) * Math.PI) / 180
+  const dLon = ((point2[0] - point1[0]) * Math.PI) / 180
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
+// 计算整条路径的总长度（米）
+function calculatePathLength(points: Point[]): number {
+  let totalLength = 0
+  for (let i = 0; i < points.length - 1; i++) {
+    const current = points[i]
+    const next = points[i + 1]
+    if (current && next) {
+      totalLength += calculateDistance(current, next)
+    }
+  }
+  return totalLength
+}
 
 interface Props {
   cameraWidth?: number | null
@@ -793,7 +821,9 @@ function smoothStripIntersections() {
   stripSegments.forEach((seg) => updateStripSegmentPolygon(seg))
 }
 
-// 根据带宽生成带状航线的区域多边形（简化版：每一段生成一个独立长方形）
+// 根据带宽生成带状航线的区域多边形（每一段路径生成一个矩形区域）
+// 注意：这里先用 proj4 将经纬度投影到 Web Mercator 平面，在米坐标中按法向偏移带宽，
+// 再反投影回经纬度，以保证矩形边与路径严格垂直，并与后端投影逻辑保持一致。
 function updateStripPathPolygon() {
   if (stripPath.value.length < 2) return
 
@@ -807,40 +837,44 @@ function updateStripPathPolygon() {
     const p2 = stripPath.value[i + 1]
     if (!p1 || !p2) continue
 
-    // 线段方向
-    const dx = p2[0] - p1[0]
-    const dy = p2[1] - p1[1]
-    const angle = (Math.atan2(dy, dx) * 180) / Math.PI
+    // 投影到 Web Mercator 平面，在米坐标中计算法向偏移
+    const [x1, y1] = proj4('EPSG:4326', 'EPSG:3857', p1)
+    const [x2, y2] = proj4('EPSG:4326', 'EPSG:3857', p2)
 
-    // 垂直方向：左侧 / 右侧
-    const leftAngle = angle + 90
-    const rightAngle = angle - 90
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const len = Math.sqrt(dx * dx + dy * dy)
+    if (!Number.isFinite(len) || len === 0) {
+      continue
+    }
 
-    // 用该段中点的纬度估算“1度经纬度对应多少米”
-    const avgLat = (p1[1] + p2[1]) / 2
-    const latRad = (avgLat * Math.PI) / 180
-    const metersPerDegLng = 111320 * Math.cos(latRad)
-    const metersPerDegLat = 111320
+    // 单位方向向量（从 p1 指向 p2）
+    const ux = dx / len
+    const uy = dy / len
 
-    // 左侧偏移向量（用左带宽）
-    const leftAngleRad = (leftAngle * Math.PI) / 180
-    const leftOffsetLng =
-      (leftBandwidth.value / metersPerDegLng) * Math.cos(leftAngleRad)
-    const leftOffsetLat =
-      (leftBandwidth.value / metersPerDegLat) * Math.sin(leftAngleRad)
+    // 左侧/右侧的单位法向量（左：逆时针90°，右：顺时针90°）
+    const nxLeftX = -uy
+    const nxLeftY = ux
+    const nxRightX = uy
+    const nxRightY = -ux
 
-    // 右侧偏移向量（用右带宽）
-    const rightAngleRad = (rightAngle * Math.PI) / 180
-    const rightOffsetLng =
-      (rightBandwidth.value / metersPerDegLng) * Math.cos(rightAngleRad)
-    const rightOffsetLat =
-      (rightBandwidth.value / metersPerDegLat) * Math.sin(rightAngleRad)
+    // 按带宽（米）在法向方向偏移
+    const leftOffsetX = nxLeftX * leftBandwidth.value
+    const leftOffsetY = nxLeftY * leftBandwidth.value
+    const rightOffsetX = nxRightX * rightBandwidth.value
+    const rightOffsetY = nxRightY * rightBandwidth.value
 
-    // 四个角点：P1 左 / P2 左 / P2 右 / P1 右
-    const p1Left: [number, number] = [p1[0] + leftOffsetLng, p1[1] + leftOffsetLat]
-    const p2Left: [number, number] = [p2[0] + leftOffsetLng, p2[1] + leftOffsetLat]
-    const p2Right: [number, number] = [p2[0] + rightOffsetLng, p2[1] + rightOffsetLat]
-    const p1Right: [number, number] = [p1[0] + rightOffsetLng, p1[1] + rightOffsetLat]
+    // 四个角点（米坐标）：P1 左 / P2 左 / P2 右 / P1 右
+    const p1LeftM: [number, number] = [x1 + leftOffsetX, y1 + leftOffsetY]
+    const p2LeftM: [number, number] = [x2 + leftOffsetX, y2 + leftOffsetY]
+    const p2RightM: [number, number] = [x2 + rightOffsetX, y2 + rightOffsetY]
+    const p1RightM: [number, number] = [x1 + rightOffsetX, y1 + rightOffsetY]
+
+    // 反投影回经纬度
+    const p1Left = proj4('EPSG:3857', 'EPSG:4326', p1LeftM) as [number, number]
+    const p2Left = proj4('EPSG:3857', 'EPSG:4326', p2LeftM) as [number, number]
+    const p2Right = proj4('EPSG:3857', 'EPSG:4326', p2RightM) as [number, number]
+    const p1Right = proj4('EPSG:3857', 'EPSG:4326', p1RightM) as [number, number]
 
     // 统一按顺序保存角点：左前、左后、右后、右前
     const leftFront: [number, number] = p1Left
@@ -870,6 +904,8 @@ function updateStripPathPolygon() {
   smoothStripIntersections()
 }
 
+// 根据当前任务类型（区域/倾斜/带状）构建请求参数，调用后端生成航线，
+// 并在地图上绘制主航线、航点和拍照点，是前端航线刷新的入口函数。
 async function updateFlightPath() {
   if (!map) return
 
